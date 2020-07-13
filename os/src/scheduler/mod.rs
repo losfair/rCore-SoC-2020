@@ -1,6 +1,6 @@
 use crate::interrupt::Context;
 use crate::sbi::set_timer;
-use riscv::register::time;
+use riscv::{asm::wfi, register::time};
 
 const DEFAULT_SCHEDULER_REENTRY_TIMEOUT: usize = 100000;
 
@@ -11,7 +11,11 @@ pub unsafe fn switch_to(context: &Context) -> ! {
 
 pub fn idle() -> ! {
     prepare_scheduler_reentry();
-    loop {}
+    loop {
+        unsafe {
+            wfi();
+        }
+    }
 }
 
 /// Sets up the timer for kernel re-entry.

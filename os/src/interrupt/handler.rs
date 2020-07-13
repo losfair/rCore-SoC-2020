@@ -44,7 +44,7 @@ fn on_stimer(context: &mut Context) -> ! {
     static mut TICKS: usize = 0;
     unsafe {
         TICKS += 1;
-        if (TICKS % 100 == 0) {
+        if TICKS % 100 == 0 {
             println!("{} ticks", TICKS);
         }
         switch_to(context);

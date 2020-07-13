@@ -15,3 +15,4 @@ debug = true # Preserve debug info.
 
 [dependencies]
 riscv = { git = "https://github.com/rcore-os/riscv", features = ["inline-asm"] }
+dlmalloc = { git = "https://github.com/losfair/dlmalloc-rs", branch = "rcore-soc", features = ["global", "external"] }

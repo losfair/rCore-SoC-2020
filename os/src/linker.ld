@@ -8,32 +8,32 @@ SECTIONS
 {
     . = BASE_ADDRESS;
 
-    kernel_start = .;
+    KERNEL_START = .;
 
-    text_start = .;
+    TEXT_START = .;
 
     .text : {
         *(.text.entry)
         *(.text .text.*)
     }
 
-    rodata_start = .;
+    RODATA_START = .;
 
     .rodata : {
         *(.rodata .rodata.*)
     }
 
-    data_start = .;
+    DATA_START = .;
 
     .data : {
         *(.data .data.*)
     }
 
-    bss_start = .;
+    BSS_START = .;
 
     .bss : {
         *(.sbss .bss .bss.*)
     }
 
-    kernel_end = .;
+    KERNEL_END = .;
 }
