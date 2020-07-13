@@ -1,10 +1,16 @@
 TARGET      := riscv64imac-unknown-none-elf
-MODE        := debug
+MODE        ?= debug
 KERNEL_FILE := target/$(TARGET)/$(MODE)/os
 BIN_FILE    := target/$(TARGET)/$(MODE)/kernel.bin
 
 OBJDUMP     := rust-objdump --arch-name=riscv64
 OBJCOPY     := rust-objcopy --binary-architecture=riscv64
+
+ifeq ($(MODE), release)
+CARGO_BUILD_CMD := @cargo build --release
+else
+CARGO_BUILD_CMD := @cargo build
+endif
 
 .PHONY: doc kernel build clean qemu run
 
@@ -17,7 +23,7 @@ doc:
 
 # 编译 kernel
 kernel:
-	@cargo build
+	$(CARGO_BUILD_CMD)
 
 # 生成 kernel 的二进制文件
 $(BIN_FILE): kernel
