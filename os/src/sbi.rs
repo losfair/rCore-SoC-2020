@@ -11,9 +11,9 @@ const SBI_REMOTE_SFENCE_VMA_ASID: usize = 7;
 const SBI_SHUTDOWN: usize = 8;
 
 /// Invokes an SBI method.
-/// 
+///
 /// # Safety
-/// 
+///
 /// Calling into SBI allows powerful system control operations. The caller is responsible to ensure
 /// that the arguments passed to `sbi_call` are valid.
 #[inline(always)]
@@ -36,9 +36,7 @@ pub fn console_putchar(c: u8) {
 
 /// Reads a character from the console. Returns `-1` for nothing.
 pub fn console_getchar() -> i32 {
-    unsafe {
-        sbi_call(SBI_CONSOLE_GETCHAR, 0, 0, 0) as _
-    }
+    unsafe { sbi_call(SBI_CONSOLE_GETCHAR, 0, 0, 0) as _ }
 }
 
 /// Shuts down the system.
@@ -49,3 +47,9 @@ pub fn shutdown() -> ! {
     unreachable!()
 }
 
+/// Schedules a timer interrupt after the `time`-th cycle.
+pub fn set_timer(time: usize) {
+    unsafe {
+        sbi_call(SBI_SET_TIMER, time, 0, 0);
+    }
+}

@@ -4,14 +4,19 @@
 
 #[macro_use]
 mod console;
-mod sbi;
+mod interrupt;
 mod panic;
+mod sbi;
+mod scheduler;
+mod user;
 
 // Entry point written in assembly.
 global_asm!(include_str!("entry.asm"));
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
-    println!("Hello RISC-V!");
+    println!("Kernel loaded.");
+    interrupt::init();
+    scheduler::idle();
     panic!("End of rust_main");
 }

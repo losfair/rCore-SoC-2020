@@ -1,5 +1,5 @@
-use core::fmt::{self, Write};
 use crate::sbi;
+use core::fmt::{self, Write};
 
 struct Console;
 
