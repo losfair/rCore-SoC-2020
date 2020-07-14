@@ -1,10 +1,11 @@
 use super::LockedProcess;
 use crate::error::*;
 use crate::interrupt::Context;
-use crate::scheduler::HardwareThread;
+use crate::scheduler::{EntryReason, HardwareThread};
 use alloc::boxed::Box;
 use core::mem;
 use core::sync::atomic::{AtomicU64, Ordering};
+use riscv::register::sstatus::Sstatus;
 
 pub struct Thread {
     id: Id,
@@ -29,13 +30,23 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct KernelStack([u8; 65536]);
 
 impl Thread {
-    pub fn new(process: LockedProcess) -> KernelResult<Thread> {
+    pub fn new(
+        process: LockedProcess,
+        entry: extern "C" fn(usize) -> !,
+        entry_ctx: usize,
+    ) -> KernelResult<Thread> {
         let id = Id(NEXT_ID.fetch_add(1, Ordering::Relaxed));
-        Ok(Thread {
+        let mut th = Thread {
             id,
             process,
             kernel_stack: KernelStack::new(),
-        })
+        };
+        let ts_ptr = th.raw_thread_state_mut() as *mut _;
+        th.context_mut().sepc = entry as usize;
+        th.context_mut().sstatus = 0x120;
+        th.context_mut().gregs[2] = ts_ptr as usize; // sp
+        th.context_mut().gregs[10] = entry_ctx; // a0
+        Ok(th)
     }
 
     pub fn raw_thread_state(&self) -> &RawThreadState {
@@ -69,5 +80,11 @@ impl Thread {
 impl KernelStack {
     fn new() -> Box<KernelStack> {
         unsafe { Box::new_zeroed().assume_init() }
+    }
+}
+
+impl RawThreadState {
+    pub unsafe fn enter_kernel(&mut self, reason: EntryReason) -> ! {
+        (*self.hart).enter_kernel(self, reason)
     }
 }

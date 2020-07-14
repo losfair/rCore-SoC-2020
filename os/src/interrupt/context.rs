@@ -1,3 +1,4 @@
+use bit_field::BitField;
 use riscv::register::sstatus::{Sstatus, SPP};
 
 extern "C" {
@@ -8,7 +9,7 @@ extern "C" {
 #[derive(Debug)]
 pub struct Context {
     pub gregs: [usize; 32],
-    pub sstatus: Sstatus,
+    pub sstatus: usize,
     pub sepc: usize,
 }
 
@@ -18,9 +19,9 @@ impl Context {
     }
 
     pub fn was_user(&self) -> bool {
-        match self.sstatus.spp() {
-            SPP::Supervisor => false,
-            SPP::User => true,
+        match self.sstatus.get_bit(8) {
+            true => false,
+            false => true,
         }
     }
 }

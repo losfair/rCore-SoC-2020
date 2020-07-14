@@ -1,6 +1,6 @@
 use super::context::Context;
 use crate::process::RawThreadState;
-use crate::scheduler::switch_to;
+use crate::scheduler::{switch_to, EntryReason};
 use riscv::register::{
     scause::{Exception, Interrupt, Scause, Trap},
     stvec,
@@ -34,20 +34,10 @@ pub extern "C" fn handle_interrupt(ts: &mut RawThreadState, scause: Scause, stva
 }
 
 fn on_breakpoint(ts: &mut RawThreadState) -> ! {
-    println!("Breakpoint at 0x{:x}", ts.context.sepc);
     ts.context.sepc += 2;
-    unsafe {
-        ts.context.leave();
-    }
+    unsafe { ts.enter_kernel(EntryReason::Breakpoint) }
 }
 
 fn on_stimer(ts: &mut RawThreadState) -> ! {
-    static mut TICKS: usize = 0;
-    unsafe {
-        TICKS += 1;
-        if TICKS % 100 == 0 {
-            println!("{} ticks", TICKS);
-        }
-        switch_to(&ts.context);
-    }
+    unsafe { ts.enter_kernel(EntryReason::Timer) }
 }

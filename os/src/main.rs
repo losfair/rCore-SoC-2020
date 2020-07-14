@@ -40,25 +40,27 @@ pub extern "C" fn rust_main() -> ! {
     allocator::init();
     interrupt::init();
     memory::init();
-    unsafe {
-        riscv::asm::ebreak();
-    }
-    test_alloc();
+    create_hart();
     println!("Entering idle state.");
     scheduler::idle();
     panic!("End of rust_main");
 }
 
-fn test_alloc() {
-    return;
-    use alloc::vec::Vec;
-    for k in 0..100 {
-        let mut v = vec![0u32; 10000];
-        v[0] = 1;
-        v[1] = 1;
-        for i in 2..v.len() {
-            v[i] = v[i - 1].wrapping_add(v[i - 2]);
+fn create_hart() {
+    use alloc::boxed::Box;
+    use process::{LockedProcess, Thread};
+    use scheduler::{HardwareThread, HardwareThreadId};
+    let p = LockedProcess::new(memory::boot_page_pool().clone()).unwrap();
+    let th = Thread::new(p.clone(), th_entry, 42).unwrap();
+    let mut hart = HardwareThread::new(HardwareThreadId(0), Box::new(th));
+    hart.return_to_current();
+}
+
+extern "C" fn th_entry(data: usize) -> ! {
+    println!("Thread entry! {}", data);
+    loop {
+        unsafe {
+            llvm_asm!("wfi" :::: "volatile");
         }
-        println!("k={} v = {:?}", k, v[v.len() - 1]);
     }
 }
