@@ -20,6 +20,7 @@ mod interrupt;
 mod layout;
 mod memory;
 mod panic;
+mod process;
 mod sbi;
 mod scheduler;
 mod sync;

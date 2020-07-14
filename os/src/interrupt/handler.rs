@@ -1,4 +1,5 @@
 use super::context::Context;
+use crate::process::RawThreadState;
 use crate::scheduler::switch_to;
 use riscv::register::{
     scause::{Exception, Interrupt, Scause, Trap},
@@ -19,34 +20,34 @@ pub fn init() {
 }
 
 #[no_mangle]
-pub extern "C" fn handle_interrupt(context: &mut Context, scause: Scause, stval: usize) -> ! {
+pub extern "C" fn handle_interrupt(ts: &mut RawThreadState, scause: Scause, stval: usize) -> ! {
     match scause.cause() {
-        Trap::Exception(Exception::Breakpoint) => on_breakpoint(context),
-        Trap::Interrupt(Interrupt::SupervisorTimer) => on_stimer(context),
+        Trap::Exception(Exception::Breakpoint) => on_breakpoint(ts),
+        Trap::Interrupt(Interrupt::SupervisorTimer) => on_stimer(ts),
         _ => panic!(
             "Unknown interrupt: {:?}\n{:#x?}\nstval: {:?}",
             scause.cause(),
-            context,
+            ts.context,
             stval
         ),
     }
 }
 
-fn on_breakpoint(context: &mut Context) -> ! {
-    println!("Breakpoint at 0x{:x}", context.sepc);
-    context.sepc += 2;
+fn on_breakpoint(ts: &mut RawThreadState) -> ! {
+    println!("Breakpoint at 0x{:x}", ts.context.sepc);
+    ts.context.sepc += 2;
     unsafe {
-        context.leave();
+        ts.context.leave();
     }
 }
 
-fn on_stimer(context: &mut Context) -> ! {
+fn on_stimer(ts: &mut RawThreadState) -> ! {
     static mut TICKS: usize = 0;
     unsafe {
         TICKS += 1;
         if TICKS % 100 == 0 {
             println!("{} ticks", TICKS);
         }
-        switch_to(context);
+        switch_to(&ts.context);
     }
 }

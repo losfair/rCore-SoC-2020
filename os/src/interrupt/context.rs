@@ -1,4 +1,4 @@
-use riscv::register::sstatus::Sstatus;
+use riscv::register::sstatus::{Sstatus, SPP};
 
 extern "C" {
     fn leave_interrupt(context: &Context) -> !;
@@ -15,5 +15,12 @@ pub struct Context {
 impl Context {
     pub unsafe fn leave(&self) -> ! {
         leave_interrupt(self);
+    }
+
+    pub fn was_user(&self) -> bool {
+        match self.sstatus.spp() {
+            SPP::Supervisor => false,
+            SPP::User => true,
+        }
     }
 }

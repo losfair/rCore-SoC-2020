@@ -1,3 +1,9 @@
+mod hart;
+mod reason;
+
+pub use hart::{HardwareThread, Id as HardwareThreadId};
+pub use reason::EntryReason;
+
 use crate::interrupt::Context;
 use crate::sbi::set_timer;
 use riscv::{asm::wfi, register::time};

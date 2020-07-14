@@ -17,6 +17,10 @@ impl VirtualPageNumber {
     pub fn start_address(self) -> VirtualAddress {
         VirtualAddress(self.0 << 12)
     }
+
+    pub fn to_phys(self) -> Option<PhysicalPageNumber> {
+        self.start_address().to_phys().map(|x| x.ppn())
+    }
 }
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
@@ -26,6 +30,10 @@ pub struct PhysicalPageNumber(pub usize);
 impl PhysicalPageNumber {
     pub fn start_address(self) -> PhysicalAddress {
         PhysicalAddress(self.0 << 12)
+    }
+
+    pub fn to_virt(self) -> Option<VirtualPageNumber> {
+        self.start_address().to_virt().map(|x| x.vpn())
     }
 }
 

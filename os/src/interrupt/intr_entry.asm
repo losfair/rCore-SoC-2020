@@ -1,30 +1,63 @@
-# 宏：将寄存器存到栈上
 .macro SAVE reg, offset
     sd  \reg, \offset*8(sp)
 .endm
 
-# 宏：将寄存器从栈中取出
 .macro LOAD reg, offset
     ld  \reg, \offset*8(sp)
 .endm
 
-    .section .text
-    .globl __interrupt
-# 进入中断
-# 保存 Context 并且进入 Rust 中的中断处理函数 interrupt::handler::handle_interrupt()
+.section .text
+.globl __interrupt
 __interrupt:
-    # 在栈上开辟 Context 所需的空间
-    addi    sp, sp, -34*8
+    # Swap stack
+    csrrw sp, sscratch, sp
 
-    # 保存通用寄存器，除了 x0（固定为 0）
+    # Kernel mode re-entry if sscratch == 0.
+    beq sp, zero, kernel_mode_reentry
+
+    # Otherwise we entered from user mode. `sp` now points to `RawThreadState`.
+
+    # Save original `gp`.
+    SAVE x3, 3 # x3 == gp
+
+    # Now use `gp` as a scratch register for usermode stack pointer, and clear `sscratch`.
+    csrrw x3, sscratch, zero
+    # Save usermode stack pointer.
+    SAVE x3, 2
+
+    # Load kernel `gp` from `RawThreadState.hart`.
+    LOAD x3, 34
+
+    j interrupt_save_start
+
+kernel_mode_reentry:
+
+    # Swap `sp` back.
+    csrrw sp, sscratch, sp
+
+    # Store `sp`.
+    SAVE sp, (-36 + 2)
+
+    # Allocate a new `RawThreadState`.
+    addi sp, sp, -8*36
+
+    # Fill padding with zero.
+    SAVE zero, 35
+
+    # `gp` already contains pointer to the current `HardwareThread`.
+    # Store it to the `RawThreadState`.
+    SAVE gp, 34
+
+    # ... and the regular `gp` slot.
+    SAVE gp, 3
+
+interrupt_save_start:
+
     SAVE    x0, 0 # Ensure other code sees a zero value.
     SAVE    x1, 1
-    # 将原来的 sp（sp 又名 x2）写入 2 位置
-    addi    x1, sp, 34*8
-    SAVE    x1, 2
-    # 其他通用寄存器
-    SAVE    x3, 3
-    SAVE    x4, 4
+    # x2 (sp) already saved
+    # x3 (gp) already saved
+    SAVE    x4, 4 # x4 == tp
     SAVE    x5, 5
     SAVE    x6, 6
     SAVE    x7, 7
@@ -53,37 +86,33 @@ __interrupt:
     SAVE    x30, 30
     SAVE    x31, 31
 
-    # 取出 CSR 并保存
     csrr    s1, sstatus
     csrr    s2, sepc
     SAVE    s1, 32
     SAVE    s2, 33
 
-    # 调用 handle_interrupt，传入参数
-    # context: &mut Context
+    # &mut RawThreadState
     mv      a0, sp
     # scause: Scause
     csrr    a1, scause
     # stval: usize
     csrr    a2, stval
+
     jal  handle_interrupt
+
     # handle_interrupt should never return
     ebreak
 
-    .globl leave_interrupt
-# 离开中断
-# 从 Context 中恢复所有寄存器，并跳转至 Context 中 sepc 的位置
+.globl leave_interrupt
 leave_interrupt:
     # We `LOAD` with `sp` as the base. So store `a0` into `sp`.
     mv sp, a0
 
-    # 恢复 CSR
     LOAD    s1, 32
     LOAD    s2, 33
     csrw    sstatus, s1
     csrw    sepc, s2
 
-    # 恢复通用寄存器
     LOAD    x1, 1
     LOAD    x3, 3
     LOAD    x4, 4
@@ -115,6 +144,5 @@ leave_interrupt:
     LOAD    x30, 30
     LOAD    x31, 31
 
-    # 恢复 sp（又名 x2）这里最后恢复是为了上面可以正常使用 LOAD 宏
     LOAD    x2, 2
     sret
