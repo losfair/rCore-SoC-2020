@@ -1,6 +1,13 @@
 #![no_std]
 #![no_main]
-#![feature(global_asm, llvm_asm, panic_info_message, alloc_error_handler)]
+#![feature(
+    global_asm,
+    llvm_asm,
+    panic_info_message,
+    alloc_error_handler,
+    new_uninit,
+    map_first_last
+)]
 
 #[macro_use]
 extern crate alloc;
@@ -8,11 +15,14 @@ extern crate alloc;
 #[macro_use]
 mod console;
 mod allocator;
+mod error;
 mod interrupt;
 mod layout;
+mod memory;
 mod panic;
 mod sbi;
 mod scheduler;
+mod sync;
 mod user;
 
 // Entry point written in assembly.
@@ -26,8 +36,9 @@ static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 pub extern "C" fn rust_main() -> ! {
     println!("Kernel loaded.");
     layout::print();
-    interrupt::init();
     allocator::init();
+    interrupt::init();
+    memory::init();
     unsafe {
         riscv::asm::ebreak();
     }
@@ -38,6 +49,7 @@ pub extern "C" fn rust_main() -> ! {
 }
 
 fn test_alloc() {
+    return;
     use alloc::vec::Vec;
     for k in 0..100 {
         let mut v = vec![0u32; 10000];

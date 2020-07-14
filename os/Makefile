@@ -45,5 +45,12 @@ qemu: build
 			-bios default \
 			-device loader,file=$(BIN_FILE),addr=0x80200000
 
+qemu-gdb: build
+	@qemu-system-riscv64 \
+			-machine virt \
+			-nographic \
+			-bios default \
+			-device loader,file=$(BIN_FILE),addr=0x80200000 \
+			-s -S
 # 一键运行
 run: build qemu

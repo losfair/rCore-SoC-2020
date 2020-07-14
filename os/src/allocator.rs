@@ -5,17 +5,14 @@ const PAGE_SIZE: usize = 4096;
 
 pub fn init() {
     unsafe {
-        HEAP_TOP = round_up_to_page_size(layout::kernel_end());
+        HEAP_TOP = layout::kernel_end().0;
+        assert!(HEAP_TOP % PAGE_SIZE == 0);
     }
     println!("allocator: Initialized.");
 }
 
-fn round_up_to_page_size(x: usize) -> usize {
-    if (x % PAGE_SIZE != 0) {
-        (x & !(PAGE_SIZE - 1)) + PAGE_SIZE
-    } else {
-        x
-    }
+pub fn heap_usage() -> usize {
+    unsafe { HEAP_TOP - layout::kernel_end().0 }
 }
 
 #[alloc_error_handler]
@@ -27,7 +24,7 @@ fn foo(_: core::alloc::Layout) -> ! {
 extern "C" fn __dlmalloc_alloc(size: usize) -> usize {
     let old_top = unsafe { HEAP_TOP };
     match old_top.checked_add(size) {
-        Some(x) if x <= layout::ram_end() => {
+        Some(x) if x <= layout::ram_end().0 => {
             unsafe {
                 // dlmalloc zeros allocated memory.
                 HEAP_TOP = x;
