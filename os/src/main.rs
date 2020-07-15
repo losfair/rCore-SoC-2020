@@ -6,7 +6,8 @@
     panic_info_message,
     alloc_error_handler,
     new_uninit,
-    map_first_last
+    map_first_last,
+    raw
 )]
 
 #[macro_use]
@@ -16,6 +17,7 @@ extern crate alloc;
 mod console;
 mod allocator;
 mod error;
+mod init;
 mod interrupt;
 mod layout;
 mod memory;
@@ -38,29 +40,9 @@ pub extern "C" fn rust_main() -> ! {
     println!("Kernel loaded.");
     layout::print();
     allocator::init();
-    interrupt::init();
     memory::init();
-    create_hart();
-    println!("Entering idle state.");
-    scheduler::idle();
-    panic!("End of rust_main");
-}
+    interrupt::init();
+    scheduler::init();
 
-fn create_hart() {
-    use alloc::boxed::Box;
-    use process::{LockedProcess, Thread};
-    use scheduler::{HardwareThread, HardwareThreadId};
-    let p = LockedProcess::new(memory::boot_page_pool().clone()).unwrap();
-    let th = Thread::new(p.clone(), th_entry, 42).unwrap();
-    let mut hart = HardwareThread::new(HardwareThreadId(0), Box::new(th));
-    hart.return_to_current();
-}
-
-extern "C" fn th_entry(data: usize) -> ! {
-    println!("Thread entry! {}", data);
-    loop {
-        unsafe {
-            llvm_asm!("wfi" :::: "volatile");
-        }
-    }
+    init::start();
 }

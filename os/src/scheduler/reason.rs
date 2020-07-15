@@ -1,7 +1,9 @@
+use crate::process::ThreadToken;
+
 #[derive(Debug)]
-pub enum EntryReason {
+pub enum EntryReason<'a> {
     Syscall,
     PageFault,
     Timer,
-    Breakpoint,
+    Breakpoint(usize, &'a ThreadToken),
 }

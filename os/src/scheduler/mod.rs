@@ -1,30 +1,25 @@
 mod hart;
+mod plan;
 mod reason;
 
 pub use hart::{HardwareThread, Id as HardwareThreadId};
+pub use plan::{GlobalPlan, Policy, SimplePolicy, SwitchReason};
 pub use reason::EntryReason;
 
 use crate::interrupt::Context;
 use crate::sbi::set_timer;
+use crate::sync::Once;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 use riscv::{asm::wfi, register::time};
 
-const DEFAULT_SCHEDULER_REENTRY_TIMEOUT: usize = 100000;
+static GLOBAL_PLAN: Once<Arc<GlobalPlan>> = Once::new();
 
-pub unsafe fn switch_to(context: &Context) -> ! {
-    prepare_scheduler_reentry();
-    context.leave();
+pub fn global_plan() -> &'static Arc<GlobalPlan> {
+    GLOBAL_PLAN.call_once(|| Arc::new(GlobalPlan::new(Box::new(SimplePolicy::new(1)))))
 }
 
-pub fn idle() -> ! {
-    prepare_scheduler_reentry();
-    loop {
-        unsafe {
-            wfi();
-        }
-    }
-}
-
-/// Sets up the timer for kernel re-entry.
-fn prepare_scheduler_reentry() {
-    set_timer(time::read() + DEFAULT_SCHEDULER_REENTRY_TIMEOUT);
+pub fn init() {
+    global_plan();
+    println!("scheduler: Initialized.");
 }

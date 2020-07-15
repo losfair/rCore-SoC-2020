@@ -4,15 +4,13 @@ mod timer;
 use riscv::register::sstatus;
 
 pub use context::Context;
+pub use handler::InterruptToken;
 
 pub fn init() {
     handler::init();
     timer::init();
 
-    // Now we are all set up. Enable S-mode interrupts.
-    unsafe {
-        sstatus::set_sie();
-    }
+    // Don't enable supervisor-mode interrupts yet. Do this in the first process.
 
     println!("interrupt: Initialized.");
 }

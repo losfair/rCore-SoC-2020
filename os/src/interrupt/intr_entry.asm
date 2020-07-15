@@ -6,53 +6,7 @@
     ld  \reg, \offset*8(sp)
 .endm
 
-.section .text
-.globl __interrupt
-__interrupt:
-    # Swap stack
-    csrrw sp, sscratch, sp
-
-    # Kernel mode re-entry if sscratch == 0.
-    beq sp, zero, kernel_mode_reentry
-
-    # Otherwise we entered from user mode. `sp` now points to `RawThreadState`.
-
-    # Save original `gp`.
-    SAVE x3, 3 # x3 == gp
-
-    # Now use `gp` as a scratch register for usermode stack pointer, and clear `sscratch`.
-    csrrw x3, sscratch, zero
-    # Save usermode stack pointer.
-    SAVE x3, 2
-
-    # Load kernel `gp` from `RawThreadState.hart`.
-    LOAD x3, 34
-
-    j interrupt_save_start
-
-kernel_mode_reentry:
-
-    # Swap `sp` back.
-    csrrw sp, sscratch, sp
-
-    # Store `sp`.
-    SAVE sp, (-36 + 2)
-
-    # Allocate a new `RawThreadState`.
-    addi sp, sp, -8*36
-
-    # Fill padding with zero.
-    SAVE zero, 35
-
-    # `gp` already contains pointer to the current `HardwareThread`.
-    # Store it to the `RawThreadState`.
-    SAVE gp, 34
-
-    # ... and the regular `gp` slot.
-    SAVE gp, 3
-
-interrupt_save_start:
-
+.macro SAVE_ALL_NO_SP_GP
     SAVE    x0, 0 # Ensure other code sees a zero value.
     SAVE    x1, 1
     # x2 (sp) already saved
@@ -86,10 +40,52 @@ interrupt_save_start:
     SAVE    x30, 30
     SAVE    x31, 31
 
-    csrr    s1, sstatus
-    csrr    s2, sepc
-    SAVE    s1, 32
-    SAVE    s2, 33
+    csrr    a0, sstatus
+    csrr    a1, sepc
+    SAVE    a0, 32
+    SAVE    a1, 33
+.endm
+
+.section .text
+.globl __interrupt
+__interrupt:
+    # Swap stack
+    csrrw sp, sscratch, sp
+
+    # Kernel mode re-entry if sscratch == 0.
+    beq sp, zero, kernel_mode_reentry
+
+    # Otherwise we entered from user mode. `sp` now points to `RawThreadState`.
+
+    # Save original `gp`.
+    SAVE x3, 3 # x3 == gp
+
+    # Now use `gp` as a scratch register for usermode stack pointer, and clear `sscratch`.
+    csrrw x3, sscratch, zero
+    # Save usermode stack pointer.
+    SAVE x3, 2
+
+    # Load kernel `gp` from `RawThreadState.hart`.
+    LOAD x3, (34 * 2 + 0)
+
+    j interrupt_save_start
+
+kernel_mode_reentry:
+    # Kernel mode reentry accepts a `&mut Context` that is not part of a `RawThreadState`.
+    # Swap `sp` back.
+    csrrw sp, sscratch, sp
+
+    # Store `sp`.
+    SAVE sp, (-34 + 2)
+
+    # Allocate a new `Context`.
+    addi sp, sp, -8*34
+
+    # Store `gp`.
+    SAVE gp, 3
+
+interrupt_save_start:
+    SAVE_ALL_NO_SP_GP
 
     # &mut RawThreadState
     mv      a0, sp

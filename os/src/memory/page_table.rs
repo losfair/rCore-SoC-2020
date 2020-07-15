@@ -18,6 +18,9 @@ pub struct TableHandle {
     pool: LockedPagePool,
 }
 
+unsafe impl Send for TableHandle {}
+unsafe impl Sync for TableHandle {}
+
 impl Drop for TableHandle {
     fn drop(&mut self) {
         self.pool.free(VirtualAddress::from(self.table).vpn());
