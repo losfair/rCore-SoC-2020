@@ -6,7 +6,7 @@
     ld  \reg, \offset*8(sp)
 .endm
 
-.macro SAVE_ALL_NO_SP_GP
+.macro SAVE_GREGS_NO_SP_GP
     SAVE    x0, 0 # Ensure other code sees a zero value.
     SAVE    x1, 1
     # x2 (sp) already saved
@@ -39,11 +39,6 @@
     SAVE    x29, 29
     SAVE    x30, 30
     SAVE    x31, 31
-
-    csrr    a0, sstatus
-    csrr    a1, sepc
-    SAVE    a0, 32
-    SAVE    a1, 33
 .endm
 
 .section .text
@@ -85,7 +80,12 @@ kernel_mode_reentry:
     SAVE gp, 3
 
 interrupt_save_start:
-    SAVE_ALL_NO_SP_GP
+    SAVE_GREGS_NO_SP_GP
+
+    csrr    a0, sstatus
+    csrr    a1, sepc
+    SAVE    a0, 32
+    SAVE    a1, 33
 
     # &mut RawThreadState
     mv      a0, sp
@@ -98,6 +98,28 @@ interrupt_save_start:
 
     # handle_interrupt should never return
     ebreak
+
+.globl save_gregs_assuming_intr_disabled
+save_gregs_assuming_intr_disabled:
+    sd x2, 2*8(a0) # sp
+    mv sp, a0 # &mut Context
+    SAVE x3, 3 # gp
+
+    li a0, 0 # the "restore path" return value
+
+    SAVE_GREGS_NO_SP_GP # GPR 0 to 31
+
+    SAVE zero, 32 # dummy value for sstatus
+
+    la a0, save_gregs_assuming_intr_disabled__ret
+    SAVE a0, 33 # sepc
+
+    LOAD sp, 2 # restore sp
+
+    li a0, 1 # the "save path" return value
+
+save_gregs_assuming_intr_disabled__ret: # shared return path
+    ret
 
 .globl leave_interrupt
 leave_interrupt:

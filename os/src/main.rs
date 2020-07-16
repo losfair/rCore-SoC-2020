@@ -7,7 +7,8 @@
     alloc_error_handler,
     new_uninit,
     map_first_last,
-    raw
+    raw,
+    const_btree_new
 )]
 
 #[macro_use]
@@ -28,6 +29,8 @@ mod scheduler;
 mod sync;
 mod user;
 
+use memory::PhysicalAddress;
+
 // Entry point written in assembly.
 global_asm!(include_str!("entry.asm"));
 
@@ -36,8 +39,11 @@ global_asm!(include_str!("entry.asm"));
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> ! {
-    println!("Kernel loaded.");
+pub extern "C" fn rust_main(_hart_id: usize, dtb_pa: PhysicalAddress) -> ! {
+    println!(
+        "Kernel loaded. Hart ID = {}, DTB physical address = {:x?}",
+        _hart_id, dtb_pa
+    );
     layout::print();
     allocator::init();
     memory::init();

@@ -1,12 +1,13 @@
 use super::EntryReason;
 use super::{GlobalPlan, SwitchReason};
-use crate::interrupt::InterruptToken;
+use crate::interrupt::{Context, InterruptToken};
 use crate::process::{create_kernel_thread, KernelTask, RawThreadState, Thread, ThreadToken};
 use crate::sbi::set_timer;
 use crate::sync::IntrCell;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 use alloc::sync::Arc;
+use bit_field::BitField;
 use core::cell::Cell;
 use core::mem;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -18,11 +19,8 @@ use riscv::{asm::wfi, register::time};
 
 const DEFAULT_SCHEDULER_REENTRY_TIMEOUT: usize = 100000;
 
-global_asm!(".globl raw_yield\nraw_yield:\nebreak\nret");
 extern "C" {
-    /// Special yield point.
-    #[allow(improper_ctypes)]
-    fn raw_yield(next: Box<Thread>, exit: usize);
+    fn save_gregs_assuming_intr_disabled(context: &mut Context) -> usize;
 }
 
 /// Scheduler state.
@@ -37,7 +35,7 @@ pub struct HardwareThread {
     plan: Arc<GlobalPlan>,
 
     /// # of `IntrGuard`s currently active on this hardware thread.
-    num_intr_guards: AtomicUsize,
+    num_intr_guards: Cell<usize>,
 
     /// Value of the SIE bit before `IntrGuard`s.
     sie_before_intr_guard: Cell<bool>,
@@ -72,7 +70,7 @@ impl HardwareThread {
             id,
             plan,
             current: IntrCell::new(initial_thread),
-            num_intr_guards: AtomicUsize::new(0),
+            num_intr_guards: Cell::new(0),
             sie_before_intr_guard: Cell::new(true),
             will_drop: IntrCell::new(LinkedList::new()),
             scheduler_state: IntrCell::new(SchedulerState::NotRunning {
@@ -86,17 +84,21 @@ impl HardwareThread {
 
     pub unsafe fn acquire_intr_guard(&self) {
         // On the same thread. So `Relaxed` works.
-        if self.num_intr_guards.fetch_add(1, Ordering::Relaxed) == 0 {
-            self.sie_before_intr_guard.set(sstatus::read().sie());
-            clear_sie();
+        let prev_sie = sstatus::read().sie();
+        clear_sie();
+        let prev_n = self.num_intr_guards.get();
+        self.num_intr_guards.set(prev_n + 1);
+        if prev_n == 0 {
+            self.sie_before_intr_guard.set(prev_sie);
         }
     }
 
     pub unsafe fn release_intr_guard(&self) {
-        let prev = self.num_intr_guards.fetch_sub(1, Ordering::Relaxed);
+        let prev = self.num_intr_guards.get();
         if prev == 0 {
             panic!("release_intr_guard: prev == 0");
         }
+        self.num_intr_guards.set(prev - 1);
         if prev == 1 {
             if self.sie_before_intr_guard.get() {
                 set_sie();
@@ -133,15 +135,32 @@ impl HardwareThread {
             };
             match self.plan.next(self.id, SwitchReason::Periodic, token) {
                 Some(next) => {
-                    self.plan.add_thread(previous_thread, token);
+                    self.plan.add_thread(previous_thread);
                     unsafe {
                         prepare_scheduler_reentry();
-                        raw_yield(next, 0);
+                        self.ll_yield(
+                            next,
+                            |old| {
+                                *self.scheduler_state.borrow_mut(self) =
+                                    SchedulerState::NotRunning {
+                                        scheduler_thread: old,
+                                    };
+                            },
+                            token,
+                        );
                     }
                 }
                 None => unsafe {
                     prepare_scheduler_reentry();
-                    raw_yield(previous_thread, 0);
+                    self.ll_yield(
+                        previous_thread,
+                        |old| {
+                            *self.scheduler_state.borrow_mut(self) = SchedulerState::NotRunning {
+                                scheduler_thread: old,
+                            };
+                        },
+                        token,
+                    );
                 },
             }
         }
@@ -203,17 +222,6 @@ impl HardwareThread {
                 self.tick(token);
             }
             EntryReason::Breakpoint(addr, thread_token) => {
-                if addr == raw_yield as usize {
-                    //println!("Raw yield breakpoint. current = {:p}", &*self.current);
-                    let current = self.current.borrow_mut(self);
-                    let kcontext = &current.raw_thread_state().kcontext;
-                    let next: Box<Thread> = unsafe { mem::transmute(kcontext.gregs[10]) }; // a0
-                    let exit = kcontext.gregs[11] != 0; // a1
-                    drop(current);
-                    self.finalize_raw_yield(next, exit, thread_token);
-                    self.return_to_current(token);
-                }
-
                 println!("Breakpoint at {:p}", addr as *mut ());
                 self.return_to_current(token);
             }
@@ -247,6 +255,67 @@ impl HardwareThread {
         ts.leave();
     }
 
+    #[inline(never)]
+    unsafe fn ll_yield<F: FnOnce(Box<Thread>)>(
+        &self,
+        next: Box<Thread>,
+        consume_old: F,
+        _: &ThreadToken,
+    ) {
+        let ts = self.current.borrow_mut(self).raw_thread_state_mut() as *mut RawThreadState;
+        let ts = &mut *ts;
+
+        self.acquire_intr_guard(); // Mask interrupts
+
+        if save_gregs_assuming_intr_disabled(&mut ts.kcontext) == 0 {
+            // restore path. SIE = 1
+
+            // already consumed by the other branch
+            mem::forget(next);
+            mem::forget(consume_old);
+        } else {
+            // save path - never returns. SIE = 0
+
+            // switch thread
+            let prev = self.replace_current(next);
+
+            // drops both `consume_old` and `prev`
+            // This is dangerous, because `consume_old` must not be interrupted.
+            consume_old(prev);
+
+            // read previous sstatus. SIE = 0
+            let mut prev_sstatus: usize = mem::transmute(sstatus::read());
+
+            // sanity check
+            assert!(
+                self.sie_before_intr_guard.get() == true,
+                "ll_yield: sie_before_intr_guard.get() != true"
+            );
+
+            // "drop" guard without actually unmasking interrupts
+            assert!(self.num_intr_guards.get() == 1, "ll_yield: interrupt guards must not be held on the current hart after `consume_old`");
+            self.num_intr_guards.set(0);
+
+            // fixup sstatus "as if" it is generated on an interrupt
+            {
+                // step 1. set spie
+                prev_sstatus.set_bit(5, true);
+
+                // step 2. set spp to supervisor
+                prev_sstatus.set_bit(8, true);
+            }
+
+            // assign the fixed-up sstatus to `kcontext`
+            ts.kcontext.sstatus = prev_sstatus;
+
+            // kcontext valid
+            ts.kcontext_valid = 1;
+
+            // return
+            self.force_return_to_current();
+        }
+    }
+
     pub fn exit_thread(&self, token: &ThreadToken) -> ! {
         self.yield_or_exit(token, true);
         unreachable!()
@@ -256,39 +325,24 @@ impl HardwareThread {
         self.yield_or_exit(token, false);
     }
 
+    pub unsafe fn release_current<F: FnOnce(Box<Thread>)>(&self, f: F, token: &ThreadToken) {
+        loop {
+            match self.plan.next(self.id, SwitchReason::Yield, token) {
+                Some(next) => {
+                    self.ll_yield(next, f, token);
+                    break;
+                }
+                None => {
+                    wfi();
+                }
+            }
+        }
+    }
+
     fn replace_current(&self, new_current: Box<Thread>) -> Box<Thread> {
         let ret = mem::replace(&mut *self.current.borrow_mut(self), new_current);
         self.populate_thread_state();
         ret
-    }
-
-    fn finalize_raw_yield(&self, next: Box<Thread>, exit: bool, token: &ThreadToken) {
-        let old = self.replace_current(next);
-        self.populate_thread_state();
-        let mut scheduler_state = self.scheduler_state.borrow_mut(self);
-        match (&*scheduler_state, exit) {
-            (SchedulerState::WillLeave, false) => {
-                // We are leaving from the scheduler.
-                *scheduler_state = SchedulerState::NotRunning {
-                    scheduler_thread: old,
-                };
-            }
-            (SchedulerState::WillLeave, true) => {
-                panic!(
-                    "finalize_raw_yield: `exit` must be false when scheduler state is `WillLeave`"
-                );
-            }
-            (SchedulerState::Running { .. }, _) => {
-                panic!("finalize_raw_yield: `scheduler_state` must not be `Running`");
-            }
-            (SchedulerState::NotRunning { .. }, true) => {
-                // We must not drop `old` here since we are using its stack space.
-                self.will_drop.borrow_mut(self).push_back(old);
-            }
-            (SchedulerState::NotRunning { .. }, false) => {
-                self.plan.add_thread(old, token);
-            }
-        }
     }
 
     fn yield_or_exit(&self, token: &ThreadToken, exit: bool) {
@@ -296,7 +350,17 @@ impl HardwareThread {
             match self.plan.next(self.id, SwitchReason::Yield, token) {
                 Some(next) => {
                     unsafe {
-                        raw_yield(next, if exit { 1 } else { 0 });
+                        self.ll_yield(
+                            next,
+                            |old| {
+                                if exit {
+                                    self.will_drop.borrow_mut(self).push_back(old);
+                                } else {
+                                    self.plan.add_thread(old);
+                                }
+                            },
+                            token,
+                        );
                     }
                     break;
                 }

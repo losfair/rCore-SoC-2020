@@ -21,7 +21,7 @@ pub fn create_kernel_thread(task: Box<dyn KernelTask>) -> KernelResult<Box<Threa
 
 pub fn spawn(task: Box<dyn KernelTask>, token: &ThreadToken) -> KernelResult<()> {
     let th = create_kernel_thread(task)?;
-    global_plan().add_thread(th, token);
+    global_plan().add_thread(th);
     Ok(())
 }
 

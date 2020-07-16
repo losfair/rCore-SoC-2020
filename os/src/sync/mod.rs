@@ -1,4 +1,8 @@
+pub mod lock;
+mod waitqueue;
+
 pub use spin::{Mutex, MutexGuard, Once};
+pub use waitqueue::{global_wait_queue, WaitQueue};
 
 use crate::interrupt::InterruptToken;
 use crate::scheduler::HardwareThread;
@@ -11,7 +15,7 @@ pub struct IntrCell<T> {
 }
 
 impl<T> IntrCell<T> {
-    pub fn new(inner: T) -> IntrCell<T> {
+    pub const fn new(inner: T) -> IntrCell<T> {
         IntrCell {
             inner: RefCell::new(inner),
         }
@@ -54,4 +58,10 @@ impl<'a, T: 'a> Drop for IntrGuardMut<'a, T> {
             self.ht.release_intr_guard();
         }
     }
+}
+
+pub fn without_interrupts<F: FnOnce() -> R, R>(ht: &HardwareThread, f: F) -> R {
+    let cell = IntrCell::new(());
+    let _guard = cell.borrow_mut(ht);
+    f()
 }

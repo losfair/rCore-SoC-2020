@@ -1,5 +1,6 @@
 use super::HardwareThreadId;
 use crate::process::{LockedProcess, ProcessId, Thread, ThreadToken};
+use crate::sync::without_interrupts;
 use crate::sync::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
@@ -21,7 +22,7 @@ pub enum SwitchReason {
 
 /// A scheduling policy.
 pub trait Policy<T: Send>: Send + Sync {
-    fn add_thread(&self, thread: Box<T>, token: &ThreadToken);
+    fn add_thread(&self, thread: Box<T>);
     fn next(
         &self,
         ht_id: HardwareThreadId,
@@ -50,7 +51,7 @@ impl<T> SimplePolicy<T> {
 }
 
 impl<T: Send> Policy<T> for SimplePolicy<T> {
-    fn add_thread(&self, thread: Box<T>, _: &ThreadToken) {
+    fn add_thread(&self, thread: Box<T>) {
         self.run_queue.lock().push_back(thread);
     }
     fn next(
@@ -100,8 +101,8 @@ impl GlobalPlan {
         }
     }
 
-    pub fn add_thread(&self, thread: Box<Thread>, token: &ThreadToken) {
-        self.policy.add_thread(thread, token)
+    pub fn add_thread(&self, thread: Box<Thread>) {
+        self.policy.add_thread(thread)
     }
 
     pub fn next(
