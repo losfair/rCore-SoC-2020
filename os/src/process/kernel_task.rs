@@ -9,13 +9,18 @@ pub trait KernelTask {
     fn run(self: Box<Self>, ht: &mut HardwareThread, token: &ThreadToken);
 }
 
-pub fn spawn(task: Box<dyn KernelTask>, token: &ThreadToken) -> KernelResult<()> {
+pub fn create_kernel_thread(task: Box<dyn KernelTask>) -> KernelResult<Box<Thread>> {
     let obj: TraitObject = unsafe { mem::transmute(task) };
     let th = Thread::new(
         second_level_trampoline,
         obj.data as usize,
         obj.vtable as usize,
     )?;
+    Ok(th)
+}
+
+pub fn spawn(task: Box<dyn KernelTask>, token: &ThreadToken) -> KernelResult<()> {
+    let th = create_kernel_thread(task)?;
     global_plan().add_thread(th, token);
     Ok(())
 }

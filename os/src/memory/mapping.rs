@@ -1,7 +1,7 @@
 use super::LockedPagePool;
 use super::{
     PageTable, PageTableEntry, PageTableEntryFlags, PageTableHandle, PhysicalPageNumber,
-    VirtualAddress, VirtualPageNumber,
+    VirtualPageNumber,
 };
 use crate::error::*;
 use crate::layout;

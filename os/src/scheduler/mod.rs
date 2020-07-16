@@ -6,12 +6,9 @@ pub use hart::{HardwareThread, Id as HardwareThreadId};
 pub use plan::{GlobalPlan, Policy, SimplePolicy, SwitchReason};
 pub use reason::EntryReason;
 
-use crate::interrupt::Context;
-use crate::sbi::set_timer;
 use crate::sync::Once;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
-use riscv::{asm::wfi, register::time};
 
 static GLOBAL_PLAN: Once<Arc<GlobalPlan>> = Once::new();
 

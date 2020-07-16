@@ -1,10 +1,8 @@
 use super::LockedPagePool;
 use super::{PhysicalPageNumber, VirtualAddress};
 use crate::error::*;
-use alloc::boxed::Box;
 use bit_field::BitField;
 use bitflags::bitflags;
-use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 
 #[repr(C, align(4096))]

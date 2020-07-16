@@ -1,9 +1,7 @@
 use crate::memory::boot_page_pool;
 use crate::process::{spawn, KernelTask, LockedProcess, Thread, ThreadToken};
-use crate::scheduler::{global_plan, HardwareThread, HardwareThreadId, SimplePolicy};
-use crate::sync::Once;
+use crate::scheduler::{global_plan, HardwareThread, HardwareThreadId};
 use alloc::boxed::Box;
-use alloc::sync::Arc;
 
 pub fn start() -> ! {
     let mut ht = HardwareThread::new(
@@ -11,7 +9,7 @@ pub fn start() -> ! {
         global_plan().clone(),
         make_init_thread(),
     );
-    unsafe { ht.force_return_to_current() }
+    unsafe { ht.start() }
 }
 
 fn make_init_thread() -> Box<Thread> {
@@ -20,8 +18,9 @@ fn make_init_thread() -> Box<Thread> {
 
 fn init_thread(ht: &mut HardwareThread, token: &ThreadToken, _: usize, _: usize) -> ! {
     println!("Init thread started.");
-    spawn(Box::new(YieldThread(0)), token);
-    spawn(Box::new(YieldThread(1)), token);
+    spawn(Box::new(YieldThread(0)), token).unwrap();
+    spawn(Box::new(YieldThread(1)), token).unwrap();
+    ht.exit_thread(token);
     let mut i: usize = 0;
     loop {
         println!("init_thread: {}", i);
@@ -36,10 +35,9 @@ fn init_thread(ht: &mut HardwareThread, token: &ThreadToken, _: usize, _: usize)
 struct YieldThread(usize);
 impl KernelTask for YieldThread {
     fn run(self: Box<Self>, ht: &mut HardwareThread, token: &ThreadToken) {
-        loop {
+        for i in 0..10 {
             println!("yield thread: {}", self.0);
             ht.do_yield(token);
         }
-        drop(self);
     }
 }

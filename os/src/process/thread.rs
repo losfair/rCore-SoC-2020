@@ -5,9 +5,7 @@ use crate::scheduler::{EntryReason, HardwareThread};
 use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::mem;
-use core::raw::TraitObject;
 use core::sync::atomic::{AtomicU64, Ordering};
-use riscv::register::sstatus::Sstatus;
 
 pub struct Thread {
     id: Id,
@@ -21,7 +19,7 @@ pub struct Thread {
 pub struct ThreadToken(());
 
 impl ThreadToken {
-    pub unsafe fn assume_synchronous_exception(interrupt_token: &InterruptToken) -> &ThreadToken {
+    pub unsafe fn assume_synchronous_exception(_: &InterruptToken) -> &ThreadToken {
         static TOKEN: ThreadToken = ThreadToken(());
         &TOKEN
     }

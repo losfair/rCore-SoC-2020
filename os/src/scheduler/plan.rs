@@ -16,18 +16,12 @@ pub struct GlobalPlan {
 #[derive(Copy, Clone, Debug)]
 pub enum SwitchReason<'a> {
     Yield(&'a ThreadToken),
-    PeriodicInterrupt,
+    Periodic,
 }
 
 /// A scheduling policy.
-///
-/// # Safety
-///
-/// 1. A `Policy` must not drop any threads provided to it.
-/// 2. `next()` must not allocate or deallocate anything when called with `SwitchReason::PeriodicInterrupt`.
-pub unsafe trait Policy<T: Send>: Send + Sync {
+pub trait Policy<T: Send>: Send + Sync {
     fn add_thread(&self, thread: Box<T>, token: &ThreadToken);
-    fn return_thread_interrupt(&self, thread: Box<T>);
     fn next(&self, ht_id: HardwareThreadId, reason: SwitchReason) -> Option<Box<T>>;
     fn drain_threads(&mut self) -> Vec<Box<T>>;
 }
@@ -50,11 +44,8 @@ impl<T> SimplePolicy<T> {
     }
 }
 
-unsafe impl<T: Send> Policy<T> for SimplePolicy<T> {
+impl<T: Send> Policy<T> for SimplePolicy<T> {
     fn add_thread(&self, thread: Box<T>, _: &ThreadToken) {
-        self.run_queue.lock().push_back(thread);
-    }
-    fn return_thread_interrupt(&self, thread: Box<T>) {
         self.run_queue.lock().push_back(thread);
     }
     fn next(&self, ht_id: HardwareThreadId, reason: SwitchReason) -> Option<Box<T>> {
@@ -65,7 +56,7 @@ unsafe impl<T: Send> Policy<T> for SimplePolicy<T> {
                 // The thread requested to yield itself and give up its remaining time slice.
                 attempt_switch = true;
             }
-            SwitchReason::PeriodicInterrupt => {
+            SwitchReason::Periodic => {
                 // Periodic timer interrupt.
                 let remaining_ticks: &AtomicU32 = &self.remaining_ticks_per_ht[ht_id.0 as usize];
                 attempt_switch = match remaining_ticks.load(Ordering::Relaxed) {
@@ -101,9 +92,6 @@ impl GlobalPlan {
 
     pub fn add_thread(&self, thread: Box<Thread>, token: &ThreadToken) {
         self.policy.add_thread(thread, token)
-    }
-    pub fn return_thread_interrupt(&self, thread: Box<Thread>) {
-        self.policy.return_thread_interrupt(thread)
     }
 
     pub fn next(&self, ht_id: HardwareThreadId, reason: SwitchReason) -> Option<Box<Thread>> {

@@ -1,7 +1,4 @@
-use super::{
-    LockedPagePool, Mapping, PageTableEntryFlags, PhysicalPageNumber, Segment, SegmentBacking,
-    VirtualPageNumber,
-};
+use super::{LockedPagePool, Mapping, PageTableEntryFlags, Segment, SegmentBacking};
 use crate::error::*;
 use crate::layout;
 
