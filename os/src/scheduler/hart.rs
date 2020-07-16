@@ -212,8 +212,6 @@ impl HardwareThread {
             }
         }
     }
-
-    pub fn spawn(&self, token: &ThreadToken, th: Box<Thread>) {}
 }
 
 /// Sets up the timer for kernel re-entry.

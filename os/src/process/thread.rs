@@ -3,6 +3,7 @@ use crate::error::*;
 use crate::interrupt::{Context, InterruptToken};
 use crate::scheduler::{EntryReason, HardwareThread};
 use alloc::boxed::Box;
+use core::cell::UnsafeCell;
 use core::mem;
 use core::raw::TraitObject;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,7 @@ pub struct Thread {
     id: Id,
     pub process: Option<LockedProcess>,
     kernel_stack: Box<KernelStack>,
+    auto_drop_allowed: bool,
 }
 
 /// A token that indicates execution in a kernel thread context (SIE = 1).
@@ -22,6 +24,14 @@ impl ThreadToken {
     pub unsafe fn assume_synchronous_exception(interrupt_token: &InterruptToken) -> &ThreadToken {
         static TOKEN: ThreadToken = ThreadToken(());
         &TOKEN
+    }
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        if !self.auto_drop_allowed {
+            panic!("Attempting to automatically drop a thread. Use `drop_assuming_not_current` instead.");
+        }
     }
 }
 
@@ -77,8 +87,12 @@ pub struct Id(pub u64);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+/// The kernel stack.
+///
+/// Wrapped with `UnsafeCell` because the current stack pointer can be an implicit reference
+/// to the kernel stack.
 #[repr(C, align(16))]
-struct KernelStack([u8; 65536]);
+struct KernelStack(UnsafeCell<[u8; 65536]>);
 
 impl Thread {
     pub fn new(
@@ -93,7 +107,6 @@ impl Thread {
             entry_ctx2: usize,
         ) -> ! {
             let token = ThreadToken(());
-            println!("thread entry. hart = {:p}", &mut *ts.hart);
             entry(&mut *ts.hart, &token, entry_ctx1, entry_ctx2)
         }
         let id = Id(NEXT_ID.fetch_add(1, Ordering::Relaxed));
@@ -101,6 +114,7 @@ impl Thread {
             id,
             process: None,
             kernel_stack: KernelStack::new(),
+            auto_drop_allowed: false,
         };
         let ts_ptr = th.raw_thread_state_mut() as *mut _;
         th.raw_thread_state_mut().kcontext_valid = 1;
@@ -119,22 +133,24 @@ impl Thread {
         assert!(mem::size_of::<RawThreadState>() == (34 * 2 + 2) * 8);
     }
 
+    /// Drops a thread, assuming we are not currently running on its stack.
+    pub unsafe fn drop_assuming_not_current(mut self: Box<Self>) {
+        self.auto_drop_allowed = true;
+    }
+
     pub fn raw_thread_state(&self) -> &RawThreadState {
         Self::check_ts_size();
         unsafe {
-            mem::transmute(
-                &self.kernel_stack.0[self.kernel_stack.0.len() - mem::size_of::<RawThreadState>()],
-            )
+            let kernel_stack = &*self.kernel_stack.0.get();
+            mem::transmute(&kernel_stack[kernel_stack.len() - mem::size_of::<RawThreadState>()])
         }
     }
 
     pub fn raw_thread_state_mut(&mut self) -> &mut RawThreadState {
         Self::check_ts_size();
         unsafe {
-            mem::transmute(
-                &mut self.kernel_stack.0
-                    [self.kernel_stack.0.len() - mem::size_of::<RawThreadState>()],
-            )
+            let kernel_stack = &mut *self.kernel_stack.0.get();
+            mem::transmute(&mut kernel_stack[kernel_stack.len() - mem::size_of::<RawThreadState>()])
         }
     }
 }
