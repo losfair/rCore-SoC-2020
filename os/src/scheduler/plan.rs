@@ -14,15 +14,20 @@ pub struct GlobalPlan {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum SwitchReason<'a> {
-    Yield(&'a ThreadToken),
+pub enum SwitchReason {
+    Yield,
     Periodic,
 }
 
 /// A scheduling policy.
 pub trait Policy<T: Send>: Send + Sync {
     fn add_thread(&self, thread: Box<T>, token: &ThreadToken);
-    fn next(&self, ht_id: HardwareThreadId, reason: SwitchReason) -> Option<Box<T>>;
+    fn next(
+        &self,
+        ht_id: HardwareThreadId,
+        reason: SwitchReason,
+        token: &ThreadToken,
+    ) -> Option<Box<T>>;
     fn drain_threads(&mut self) -> Vec<Box<T>>;
 }
 
@@ -48,11 +53,16 @@ impl<T: Send> Policy<T> for SimplePolicy<T> {
     fn add_thread(&self, thread: Box<T>, _: &ThreadToken) {
         self.run_queue.lock().push_back(thread);
     }
-    fn next(&self, ht_id: HardwareThreadId, reason: SwitchReason) -> Option<Box<T>> {
+    fn next(
+        &self,
+        ht_id: HardwareThreadId,
+        reason: SwitchReason,
+        _: &ThreadToken,
+    ) -> Option<Box<T>> {
         let attempt_switch: bool;
 
         match reason {
-            SwitchReason::Yield(_) => {
+            SwitchReason::Yield => {
                 // The thread requested to yield itself and give up its remaining time slice.
                 attempt_switch = true;
             }
@@ -94,7 +104,12 @@ impl GlobalPlan {
         self.policy.add_thread(thread, token)
     }
 
-    pub fn next(&self, ht_id: HardwareThreadId, reason: SwitchReason) -> Option<Box<Thread>> {
-        self.policy.next(ht_id, reason)
+    pub fn next(
+        &self,
+        ht_id: HardwareThreadId,
+        reason: SwitchReason,
+        token: &ThreadToken,
+    ) -> Option<Box<Thread>> {
+        self.policy.next(ht_id, reason, token)
     }
 }

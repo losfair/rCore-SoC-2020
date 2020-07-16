@@ -86,7 +86,7 @@ impl HardwareThread {
                     SchedulerState::Running { previous_thread } => previous_thread,
                     _ => panic!("scheduler_loop: bad previous state"),
                 };
-            match self.plan.next(self.id, SwitchReason::Periodic) {
+            match self.plan.next(self.id, SwitchReason::Periodic, token) {
                 Some(next) => {
                     self.plan.add_thread(previous_thread, token);
                     unsafe {
@@ -237,7 +237,7 @@ impl HardwareThread {
 
     fn yield_or_exit(&mut self, token: &ThreadToken, exit: bool) {
         loop {
-            match self.plan.next(self.id, SwitchReason::Yield(token)) {
+            match self.plan.next(self.id, SwitchReason::Yield, token) {
                 Some(next) => {
                     unsafe {
                         raw_yield(next, if exit { 1 } else { 0 });
