@@ -4,7 +4,7 @@ use crate::interrupt::InterruptToken;
 use crate::process::{create_kernel_thread, KernelTask, Thread, ThreadToken};
 use crate::sbi::set_timer;
 use alloc::boxed::Box;
-use alloc::collections::vec_deque::VecDeque;
+use alloc::collections::linked_list::LinkedList;
 use alloc::sync::Arc;
 use core::mem;
 use riscv::register::sie::{clear_stimer, set_stimer};
@@ -36,7 +36,9 @@ pub struct HardwareThread {
     current: Box<Thread>,
 
     /// A list of threads that are waiting to be dropped.
-    will_drop: VecDeque<Box<Thread>>,
+    /// 
+    /// Avoid using continuous storage due to how our allocator works.
+    will_drop: LinkedList<Box<Thread>>,
 
     /// The scheduler state.
     scheduler_state: SchedulerState,
@@ -58,7 +60,7 @@ impl HardwareThread {
             id,
             plan,
             current: initial_thread,
-            will_drop: VecDeque::new(),
+            will_drop: LinkedList::new(),
             scheduler_state: SchedulerState::NotRunning {
                 scheduler_thread: Self::scheduler_thread(),
             },
@@ -81,6 +83,13 @@ impl HardwareThread {
 
     fn scheduler_loop(&mut self, token: &ThreadToken) -> ! {
         loop {
+            // Drop all threads in `will_drop`.
+            for th in mem::replace(&mut self.will_drop, LinkedList::new()) {
+                unsafe {
+                    th.drop_assuming_not_current();
+                }
+            }
+            // Choose next thread to run.
             let previous_thread =
                 match mem::replace(&mut self.scheduler_state, SchedulerState::WillLeave) {
                     SchedulerState::Running { previous_thread } => previous_thread,

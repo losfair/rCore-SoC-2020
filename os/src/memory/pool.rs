@@ -60,18 +60,19 @@ impl PagePool {
     }
 
     pub fn allocate(&mut self) -> KernelResult<VirtualPageNumber> {
-        match self.usable_pages.pop_first() {
-            Some((major, minor)) => {
-                let set_info = &mut self.sets[major as usize];
-                let page = &mut set_info.set.pages[minor as usize] as *mut Page;
-                set_info.used_pages += 1;
-                let vpn = VirtualAddress::from(page).vpn();
-                self.allocated_pages.insert(vpn, (major, minor));
-                Ok(vpn)
-            }
-            None => {
-                self.grow()?;
-                self.allocate()
+        loop {
+            match self.usable_pages.pop_first() {
+                Some((major, minor)) => {
+                    let set_info = &mut self.sets[major as usize];
+                    let page = &mut set_info.set.pages[minor as usize] as *mut Page;
+                    set_info.used_pages += 1;
+                    let vpn = VirtualAddress::from(page).vpn();
+                    self.allocated_pages.insert(vpn, (major, minor));
+                    break Ok(vpn);
+                }
+                None => {
+                    self.grow()?;
+                }
             }
         }
     }
