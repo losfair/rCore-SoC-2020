@@ -16,7 +16,7 @@ fn make_init_thread() -> Box<Thread> {
     Thread::new(init_thread, 0, 0).unwrap()
 }
 
-fn init_thread(ht: &mut HardwareThread, token: &ThreadToken, _: usize, _: usize) -> ! {
+fn init_thread(ht: &HardwareThread, token: &ThreadToken, _: usize, _: usize) -> ! {
     println!("Init thread started.");
     spawn(Box::new(YieldThread(0)), token).unwrap();
     spawn(Box::new(YieldThread(1)), token).unwrap();
@@ -34,7 +34,7 @@ fn init_thread(ht: &mut HardwareThread, token: &ThreadToken, _: usize, _: usize)
 
 struct YieldThread(usize);
 impl KernelTask for YieldThread {
-    fn run(self: Box<Self>, ht: &mut HardwareThread, token: &ThreadToken) {
+    fn run(self: Box<Self>, ht: &HardwareThread, token: &ThreadToken) {
         for i in 0..10 {
             println!("yield thread: {}", self.0);
             ht.do_yield(token);

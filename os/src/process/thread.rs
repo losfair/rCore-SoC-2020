@@ -94,13 +94,13 @@ struct KernelStack(UnsafeCell<[u8; 65536]>);
 
 impl Thread {
     pub fn new(
-        entry: fn(&mut HardwareThread, &ThreadToken, usize, usize) -> !,
+        entry: fn(&HardwareThread, &ThreadToken, usize, usize) -> !,
         entry_ctx1: usize,
         entry_ctx2: usize,
     ) -> KernelResult<Box<Thread>> {
         unsafe extern "C" fn thread_entry_trampoline(
             ts: &mut RawThreadState,
-            entry: fn(&mut HardwareThread, &ThreadToken, usize, usize) -> !,
+            entry: fn(&HardwareThread, &ThreadToken, usize, usize) -> !,
             entry_ctx1: usize,
             entry_ctx2: usize,
         ) -> ! {
@@ -136,20 +136,20 @@ impl Thread {
         self.auto_drop_allowed = true;
     }
 
-    pub fn raw_thread_state(&self) -> &RawThreadState {
-        Self::check_ts_size();
-        unsafe {
-            let kernel_stack = &*self.kernel_stack.0.get();
-            mem::transmute(&kernel_stack[kernel_stack.len() - mem::size_of::<RawThreadState>()])
-        }
-    }
-
-    pub fn raw_thread_state_mut(&mut self) -> &mut RawThreadState {
+    pub fn raw_thread_state_mut_ptr(&self) -> *mut RawThreadState {
         Self::check_ts_size();
         unsafe {
             let kernel_stack = &mut *self.kernel_stack.0.get();
             mem::transmute(&mut kernel_stack[kernel_stack.len() - mem::size_of::<RawThreadState>()])
         }
+    }
+
+    pub fn raw_thread_state(&self) -> &RawThreadState {
+        unsafe { &*self.raw_thread_state_mut_ptr() }
+    }
+
+    pub fn raw_thread_state_mut(&mut self) -> &mut RawThreadState {
+        unsafe { &mut *self.raw_thread_state_mut_ptr() }
     }
 }
 

@@ -1,13 +1,19 @@
 use super::EntryReason;
 use super::{GlobalPlan, SwitchReason};
 use crate::interrupt::InterruptToken;
-use crate::process::{create_kernel_thread, KernelTask, Thread, ThreadToken};
+use crate::process::{create_kernel_thread, KernelTask, RawThreadState, Thread, ThreadToken};
 use crate::sbi::set_timer;
+use crate::sync::IntrCell;
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 use alloc::sync::Arc;
+use core::cell::Cell;
 use core::mem;
-use riscv::register::sie::{clear_stimer, set_stimer};
+use core::sync::atomic::{AtomicUsize, Ordering};
+use riscv::register::{
+    sie::{clear_stimer, set_stimer},
+    sstatus::{self, clear_sie, set_sie},
+};
 use riscv::{asm::wfi, register::time};
 
 const DEFAULT_SCHEDULER_REENTRY_TIMEOUT: usize = 100000;
@@ -30,18 +36,24 @@ pub struct HardwareThread {
     id: Id,
     plan: Arc<GlobalPlan>,
 
+    /// # of `IntrGuard`s currently active on this hardware thread.
+    num_intr_guards: AtomicUsize,
+
+    /// Value of the SIE bit before `IntrGuard`s.
+    sie_before_intr_guard: Cell<bool>,
+
     /// The current thread.
     ///
     /// NOT safe to drop since it contains the stack of the running code itself.
-    current: Box<Thread>,
+    current: IntrCell<Box<Thread>>,
 
     /// A list of threads that are waiting to be dropped.
-    /// 
+    ///
     /// Avoid using continuous storage due to how our allocator works.
-    will_drop: LinkedList<Box<Thread>>,
+    will_drop: IntrCell<LinkedList<Box<Thread>>>,
 
     /// The scheduler state.
-    scheduler_state: SchedulerState,
+    scheduler_state: IntrCell<SchedulerState>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -59,21 +71,43 @@ impl HardwareThread {
         let mut ht = Box::new(HardwareThread {
             id,
             plan,
-            current: initial_thread,
-            will_drop: LinkedList::new(),
-            scheduler_state: SchedulerState::NotRunning {
+            current: IntrCell::new(initial_thread),
+            num_intr_guards: AtomicUsize::new(0),
+            sie_before_intr_guard: Cell::new(true),
+            will_drop: IntrCell::new(LinkedList::new()),
+            scheduler_state: IntrCell::new(SchedulerState::NotRunning {
                 scheduler_thread: Self::scheduler_thread(),
-            },
+            }),
         });
         ht.populate_thread_state();
 
         ht
     }
 
+    pub unsafe fn acquire_intr_guard(&self) {
+        // On the same thread. So `Relaxed` works.
+        if self.num_intr_guards.fetch_add(1, Ordering::Relaxed) == 0 {
+            self.sie_before_intr_guard.set(sstatus::read().sie());
+            clear_sie();
+        }
+    }
+
+    pub unsafe fn release_intr_guard(&self) {
+        let prev = self.num_intr_guards.fetch_sub(1, Ordering::Relaxed);
+        if prev == 0 {
+            panic!("release_intr_guard: prev == 0");
+        }
+        if prev == 1 {
+            if self.sie_before_intr_guard.get() {
+                set_sie();
+            }
+        }
+    }
+
     fn scheduler_thread() -> Box<Thread> {
         struct SchedulerThread;
         impl KernelTask for SchedulerThread {
-            fn run(self: Box<Self>, ht: &mut HardwareThread, token: &ThreadToken) {
+            fn run(self: Box<Self>, ht: &HardwareThread, token: &ThreadToken) {
                 drop(self);
                 ht.scheduler_loop(token)
             }
@@ -81,20 +115,22 @@ impl HardwareThread {
         create_kernel_thread(Box::new(SchedulerThread)).unwrap()
     }
 
-    fn scheduler_loop(&mut self, token: &ThreadToken) -> ! {
+    fn scheduler_loop(&self, token: &ThreadToken) -> ! {
         loop {
             // Drop all threads in `will_drop`.
-            for th in mem::replace(&mut self.will_drop, LinkedList::new()) {
+            for th in mem::replace(&mut *self.will_drop.borrow_mut(self), LinkedList::new()) {
                 unsafe {
                     th.drop_assuming_not_current();
                 }
             }
             // Choose next thread to run.
-            let previous_thread =
-                match mem::replace(&mut self.scheduler_state, SchedulerState::WillLeave) {
-                    SchedulerState::Running { previous_thread } => previous_thread,
-                    _ => panic!("scheduler_loop: bad previous state"),
-                };
+            let previous_thread = match mem::replace(
+                &mut *self.scheduler_state.borrow_mut(self),
+                SchedulerState::WillLeave,
+            ) {
+                SchedulerState::Running { previous_thread } => previous_thread,
+                _ => panic!("scheduler_loop: bad previous state"),
+            };
             match self.plan.next(self.id, SwitchReason::Periodic, token) {
                 Some(next) => {
                     self.plan.add_thread(previous_thread, token);
@@ -114,38 +150,47 @@ impl HardwareThread {
     /// Populate the state of a newly-pinned thread.
     ///
     /// Should be called each time after `self.current` is changed.
-    fn populate_thread_state(&mut self) {
-        let self_ptr = self as *mut HardwareThread;
-        self.current.raw_thread_state_mut().hart = self_ptr;
+    fn populate_thread_state(&self) {
+        let self_ptr = self as *const _ as *mut HardwareThread;
+        self.current.borrow_mut(self).raw_thread_state_mut().hart = self_ptr;
     }
 
-    fn prepare_return_to_user(&mut self) {
+    fn prepare_return_to_user(&self) {
         unsafe {
-            llvm_asm!("csrw sscratch, $0" :: "r" (self.current.raw_thread_state_mut()) :: "volatile");
+            llvm_asm!("csrw sscratch, $0" :: "r" (self.current.borrow_mut(self).raw_thread_state_mut()) :: "volatile");
         }
     }
 
-    fn prepare_return_to_kernel(&mut self) {
-        let self_ptr = self as *mut HardwareThread;
-        self.current.raw_thread_state_mut().kcontext.gregs[3] = self_ptr as usize;
+    fn prepare_return_to_kernel(&self) {
+        let self_ptr = self as *const _ as *mut HardwareThread;
         // gp
+        self.current
+            .borrow_mut(self)
+            .raw_thread_state_mut()
+            .kcontext
+            .gregs[3] = self_ptr as usize;
     }
 
     pub unsafe fn enter_kernel(&mut self, token: &InterruptToken, reason: EntryReason) -> ! {
-        match self.current.raw_thread_state_mut().was_user() {
+        let was_user = self
+            .current
+            .borrow_mut(self)
+            .raw_thread_state_mut()
+            .was_user();
+        match was_user {
             true => self.enter_from_user(token, reason),
             false => self.enter_from_kernel(token, reason),
         }
     }
 
-    fn enter_from_user(&mut self, token: &InterruptToken, reason: EntryReason) -> ! {
+    fn enter_from_user(&self, token: &InterruptToken, reason: EntryReason) -> ! {
         match reason {
             EntryReason::Timer => self.return_to_current(token),
             _ => panic!("enter_from_user: Unknown reason: {:?}", reason),
         }
     }
 
-    fn enter_from_kernel(&mut self, token: &InterruptToken, reason: EntryReason) -> ! {
+    fn enter_from_kernel(&self, token: &InterruptToken, reason: EntryReason) -> ! {
         match reason {
             EntryReason::Timer => {
                 static mut TICKS: usize = 0;
@@ -160,9 +205,11 @@ impl HardwareThread {
             EntryReason::Breakpoint(addr, thread_token) => {
                 if addr == raw_yield as usize {
                     //println!("Raw yield breakpoint. current = {:p}", &*self.current);
-                    let kcontext = &self.current.raw_thread_state().kcontext;
+                    let current = self.current.borrow_mut(self);
+                    let kcontext = &current.raw_thread_state().kcontext;
                     let next: Box<Thread> = unsafe { mem::transmute(kcontext.gregs[10]) }; // a0
                     let exit = kcontext.gregs[11] != 0; // a1
+                    drop(current);
                     self.finalize_raw_yield(next, exit, thread_token);
                     self.return_to_current(token);
                 }
@@ -174,55 +221,55 @@ impl HardwareThread {
         }
     }
 
-    pub fn return_to_current(&mut self, _: &InterruptToken) -> ! {
+    pub fn return_to_current(&self, _: &InterruptToken) -> ! {
         unsafe { self.force_return_to_current() }
     }
 
-    pub unsafe fn start(&mut self) -> ! {
+    pub fn with_current<F: FnOnce(&mut Thread) -> R, R>(&self, f: F) -> R {
+        let mut current = self.current.borrow_mut(self);
+        f(&mut **current)
+    }
+
+    pub unsafe fn start(&self) -> ! {
         prepare_scheduler_reentry();
         self.force_return_to_current();
     }
 
-    unsafe fn force_return_to_current(&mut self) -> ! {
-        match self.current.raw_thread_state_mut().was_user() {
+    unsafe fn force_return_to_current(&self) -> ! {
+        // We are in interrupt context. SIE is already disabled, so this is safe.
+        let ts = self.current.borrow_mut(self).raw_thread_state_mut() as *mut RawThreadState;
+        let ts = &mut *ts;
+
+        match ts.was_user() {
             true => self.prepare_return_to_user(),
             false => self.prepare_return_to_kernel(),
         };
-        unsafe {
-            self.current.raw_thread_state_mut().leave();
-        }
+        ts.leave();
     }
 
-    pub fn current(&self) -> &Thread {
-        &*self.current
-    }
-
-    pub fn current_mut(&mut self) -> &mut Thread {
-        &mut *self.current
-    }
-
-    pub fn exit_thread(&mut self, token: &ThreadToken) -> ! {
+    pub fn exit_thread(&self, token: &ThreadToken) -> ! {
         self.yield_or_exit(token, true);
         unreachable!()
     }
 
-    pub fn do_yield(&mut self, token: &ThreadToken) {
+    pub fn do_yield(&self, token: &ThreadToken) {
         self.yield_or_exit(token, false);
     }
 
-    fn replace_current(&mut self, new_current: Box<Thread>) -> Box<Thread> {
-        let ret = mem::replace(&mut self.current, new_current);
+    fn replace_current(&self, new_current: Box<Thread>) -> Box<Thread> {
+        let ret = mem::replace(&mut *self.current.borrow_mut(self), new_current);
         self.populate_thread_state();
         ret
     }
 
-    fn finalize_raw_yield(&mut self, next: Box<Thread>, exit: bool, token: &ThreadToken) {
+    fn finalize_raw_yield(&self, next: Box<Thread>, exit: bool, token: &ThreadToken) {
         let old = self.replace_current(next);
         self.populate_thread_state();
-        match (&self.scheduler_state, exit) {
+        let mut scheduler_state = self.scheduler_state.borrow_mut(self);
+        match (&*scheduler_state, exit) {
             (SchedulerState::WillLeave, false) => {
                 // We are leaving from the scheduler.
-                self.scheduler_state = SchedulerState::NotRunning {
+                *scheduler_state = SchedulerState::NotRunning {
                     scheduler_thread: old,
                 };
             }
@@ -236,7 +283,7 @@ impl HardwareThread {
             }
             (SchedulerState::NotRunning { .. }, true) => {
                 // We must not drop `old` here since we are using its stack space.
-                self.will_drop.push_back(old);
+                self.will_drop.borrow_mut(self).push_back(old);
             }
             (SchedulerState::NotRunning { .. }, false) => {
                 self.plan.add_thread(old, token);
@@ -244,7 +291,7 @@ impl HardwareThread {
         }
     }
 
-    fn yield_or_exit(&mut self, token: &ThreadToken, exit: bool) {
+    fn yield_or_exit(&self, token: &ThreadToken, exit: bool) {
         loop {
             match self.plan.next(self.id, SwitchReason::Yield, token) {
                 Some(next) => {
@@ -268,18 +315,23 @@ impl HardwareThread {
         }
     }
 
-    fn tick(&mut self, token: &InterruptToken) -> ! {
+    fn tick(&self, token: &InterruptToken) -> ! {
         // Mask off timer interrupt, until the scheduler thread re-enables it.
         unsafe {
             clear_stimer();
         }
 
         // Temporarily take out scheduler_state
-        match mem::replace(&mut self.scheduler_state, SchedulerState::WillLeave) {
+        let prev_state = mem::replace(
+            &mut *self.scheduler_state.borrow_mut(self),
+            SchedulerState::WillLeave,
+        );
+        match prev_state {
             SchedulerState::NotRunning { scheduler_thread } => {
                 // Switch to scheduler.
                 let previous_thread = self.replace_current(scheduler_thread);
-                self.scheduler_state = SchedulerState::Running { previous_thread };
+                *self.scheduler_state.borrow_mut(self) =
+                    SchedulerState::Running { previous_thread };
                 self.return_to_current(token);
             }
             _ => panic!("tick: bad scheduler state"),

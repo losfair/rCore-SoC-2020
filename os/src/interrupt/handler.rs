@@ -36,9 +36,9 @@ pub extern "C" fn handle_interrupt(context: &mut Context, scause: Scause, stval:
     } else {
         let ts: &mut RawThreadState;
         unsafe {
-            let x: &mut HardwareThread;
+            let x: &HardwareThread;
             llvm_asm!("mv $0, gp" : "=r"(x) :::);
-            ts = x.current_mut().raw_thread_state_mut();
+            ts = &mut *x.with_current(|current| current.raw_thread_state_mut_ptr());
             ptr::copy(context, &mut ts.kcontext, 1);
         }
         ts.kcontext_valid = 1;

@@ -6,7 +6,7 @@ use core::mem;
 use core::raw::TraitObject;
 
 pub trait KernelTask {
-    fn run(self: Box<Self>, ht: &mut HardwareThread, token: &ThreadToken);
+    fn run(self: Box<Self>, ht: &HardwareThread, token: &ThreadToken);
 }
 
 pub fn create_kernel_thread(task: Box<dyn KernelTask>) -> KernelResult<Box<Thread>> {
@@ -26,7 +26,7 @@ pub fn spawn(task: Box<dyn KernelTask>, token: &ThreadToken) -> KernelResult<()>
 }
 
 fn second_level_trampoline(
-    ht: &mut HardwareThread,
+    ht: &HardwareThread,
     token: &ThreadToken,
     data: usize,
     vtable: usize,
