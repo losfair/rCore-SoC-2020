@@ -29,12 +29,8 @@ impl<T> Mutex<T> {
     }
 
     /// Locks a pinned mutex.
-    pub fn lock<'a>(
-        self: Pin<&'a Self>,
-        ht: &'a HardwareThread,
-        token: &'a ThreadToken,
-    ) -> MutexGuard<'a, T> {
-        // Fallback when we cannot sleep
+    pub fn lock<'a>(self: Pin<&'a Self>, token: &'a ThreadToken) -> MutexGuard<'a, T> {
+        let ht = HardwareThread::this_hart();
         assert!(
             ht.has_active_intr_guards() == false,
             "Mutex::lock: ht.has_active_intr_guards() != false"
@@ -46,7 +42,6 @@ impl<T> Mutex<T> {
                     // Lock successful
                     break MutexGuard {
                         parent: self,
-                        ht,
                         token,
                     };
                 }
@@ -83,7 +78,6 @@ impl<T> Mutex<T> {
 
 pub struct MutexGuard<'a, T> {
     parent: Pin<&'a Mutex<T>>,
-    ht: &'a HardwareThread,
     token: &'a ThreadToken,
 }
 
@@ -103,6 +97,6 @@ impl<'a, T> DerefMut for MutexGuard<'a, T> {
 
 impl<'a, T> Drop for MutexGuard<'a, T> {
     fn drop(&mut self) {
-        self.parent.unlock(self.ht, self.token);
+        self.parent.unlock(HardwareThread::this_hart(), self.token);
     }
 }

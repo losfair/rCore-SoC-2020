@@ -62,7 +62,8 @@ extern "C" fn __dlmalloc_acquire_global_lock() {
         if LOCKING {
             let hart = HardwareThread::this_hart();
             //println!("acquire allocator lock on hart {:?} ({:p})", hart.id(), hart);
-            hart.put_allocator_mutex_guard(GLOBAL_MUTEX.lock(ThreadToken::new()));
+            // Assume that we are in a thread context.
+            hart.put_allocator_mutex_guard(GLOBAL_MUTEX.lock(ThreadToken::assume_thread_context()));
             //println!("acquire allocator lock done");
         }
     }

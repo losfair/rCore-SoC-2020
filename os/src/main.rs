@@ -27,6 +27,7 @@ mod process;
 mod sbi;
 mod scheduler;
 mod sync;
+mod tests;
 mod user;
 
 use memory::PhysicalAddress;

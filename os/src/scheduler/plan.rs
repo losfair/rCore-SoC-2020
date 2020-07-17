@@ -90,7 +90,7 @@ impl<T: Send> SimplePolicy<T> {
             )
         });
         if len < cap {
-            let mut rq = self.run_queue.as_ref().lock(ht, token);
+            let mut rq = self.run_queue.as_ref().lock(token);
             for _ in len..cap {
                 let maybe_thread = rq.pop_front();
                 if let Some(th) = maybe_thread {
@@ -119,7 +119,7 @@ impl<T: Send> Policy<T> for SimplePolicy<T> {
         match context {
             PolicyContext::NonCritical(token) => {
                 /*
-                self.run_queue.as_ref().lock(ht, token).push_back(thread);
+                self.run_queue.as_ref().lock(token).push_back(thread);
                 self.refill_local_queue(ht, token);
                 */
                 without_interrupts(ht, || {
@@ -181,7 +181,7 @@ impl<T: Send> Policy<T> for SimplePolicy<T> {
                     });
                     let result = match maybe_local {
                         Some(x) => Some(x),
-                        None => self.run_queue.as_ref().lock(ht, token).pop_front(),
+                        None => self.run_queue.as_ref().lock(token).pop_front(),
                     };
                     result
                     */

@@ -32,10 +32,6 @@ impl<T> IntrCell<T> {
             ht,
         }
     }
-
-    pub fn borrow_mut_intr<'a>(&'a self, _: &'a InterruptToken) -> RefMut<'a, T> {
-        self.inner.borrow_mut()
-    }
 }
 
 pub struct IntrGuardMut<'a, T: 'a> {

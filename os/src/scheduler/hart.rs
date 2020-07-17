@@ -60,8 +60,8 @@ impl Drop for HardwareThread {
 }
 
 impl HardwareThread {
-    pub fn new(id: Id, plan: Arc<GlobalPlan>, initial_thread: Box<Thread>) -> Box<Self> {
-        let mut ht = Box::new(HardwareThread {
+    pub fn new(id: Id, plan: Arc<GlobalPlan>, initial_thread: Box<Thread>) -> Pin<Box<Self>> {
+        let ht = Box::pin(HardwareThread {
             id,
             plan,
             current: IntrCell::new(initial_thread),
@@ -101,7 +101,7 @@ impl HardwareThread {
     }
 
     pub unsafe fn drop_allocator_mutex_guard(&self) {
-        let mut prev = self.allocator_mutex_guard.borrow_mut(self).take();
+        let prev = self.allocator_mutex_guard.borrow_mut(self).take();
         assert!(
             prev.is_some(),
             "drop_allocator_mutex_guard: precondition failed"
@@ -205,13 +205,14 @@ impl HardwareThread {
     fn enter_from_kernel(&self, token: &InterruptToken, reason: EntryReason) -> ! {
         match reason {
             EntryReason::Timer => {
+                /*
                 static mut TICKS: usize = 0;
                 unsafe {
                     TICKS += 1;
                     if TICKS % 100 == 0 {
                         println!("{} ticks", TICKS);
                     }
-                }
+                }*/
                 self.tick(token);
             }
             EntryReason::Breakpoint(addr) => {

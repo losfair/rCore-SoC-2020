@@ -19,7 +19,7 @@ pub struct Thread {
 pub struct ThreadToken(());
 
 impl ThreadToken {
-    pub unsafe fn new() -> &'static ThreadToken {
+    pub unsafe fn assume_thread_context() -> &'static ThreadToken {
         static TOKEN: ThreadToken = ThreadToken(());
         &TOKEN
     }
@@ -142,10 +142,6 @@ impl Thread {
             let kernel_stack = &mut *self.kernel_stack.0.get();
             mem::transmute(&mut kernel_stack[kernel_stack.len() - mem::size_of::<RawThreadState>()])
         }
-    }
-
-    pub fn raw_thread_state(&self) -> &RawThreadState {
-        unsafe { &*self.raw_thread_state_mut_ptr() }
     }
 
     pub fn raw_thread_state_mut(&mut self) -> &mut RawThreadState {
