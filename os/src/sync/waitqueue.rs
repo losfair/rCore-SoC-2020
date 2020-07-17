@@ -2,11 +2,11 @@ use super::{without_interrupts, IntrCell};
 use crate::memory::PhysicalAddress;
 use crate::process::Thread;
 use crate::process::ThreadToken;
-use crate::scheduler::{global_plan, HardwareThread};
+use crate::scheduler::{global_plan, HardwareThread, PolicyContext};
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::linked_list::LinkedList;
-use spin::Mutex as SpinMutex;
+use spin::{Mutex as SpinMutex, MutexGuard as SpinMutexGuard};
 
 static GLOBAL_WAIT_QUEUE: WaitQueue = WaitQueue::new();
 
@@ -21,31 +21,47 @@ impl WaitQueue {
         }
     }
 
+    fn lock_wakeup_sets<'a>(
+        &'a self,
+        ht: &HardwareThread,
+        token: &ThreadToken,
+    ) -> SpinMutexGuard<'a, BTreeMap<PhysicalAddress, LinkedList<Box<Thread>>>> {
+        assert!(
+            ht.has_active_intr_guards() == false,
+            "lock_wakeup_sets: bad has_active_intr_guards"
+        );
+        loop {
+            match self.wakeup_sets.try_lock() {
+                Some(x) => break x,
+                None => {
+                    ht.do_yield(token);
+                }
+            }
+        }
+    }
+
     /// Wakes a thread waiting on `addr`.
     ///
     /// Must only be called from a thread context because of possible allocator reentry.
-    pub fn wake_one(&self, ht: &HardwareThread, addr: PhysicalAddress, _: &ThreadToken) {
-        // Preempting out a thread that holds a spinlock is not great :)
-        without_interrupts(ht, || {
-            let mut wakeup_sets = self.wakeup_sets.lock();
+    pub fn wake_one(&self, ht: &HardwareThread, addr: PhysicalAddress, token: &ThreadToken) {
+        let mut wakeup_sets = self.lock_wakeup_sets(ht, token);
 
-            // TODO: Make allocator spin on its lock when SIE is disabled.
-            let th = match wakeup_sets.get_mut(&addr) {
-                Some(s) => {
-                    let elem = s
-                        .pop_front()
-                        .expect("WaitQueue::wake_one: empty wait queue in non-empty entry");
-                    if s.len() == 0 {
-                        wakeup_sets.remove(&addr).unwrap();
-                    }
-                    Some(elem)
+        let th = match wakeup_sets.get_mut(&addr) {
+            Some(s) => {
+                let elem = s
+                    .pop_front()
+                    .expect("WaitQueue::wake_one: empty wait queue in non-empty entry");
+                if s.len() == 0 {
+                    wakeup_sets.remove(&addr).unwrap();
                 }
-                None => None,
-            };
-            if let Some(th) = th {
-                global_plan().add_thread(th);
+                Some(elem)
             }
-        });
+            None => None,
+        };
+
+        if let Some(th) = th {
+            global_plan().add_thread(ht, PolicyContext::NonCritical(token), th);
+        }
     }
 
     /// Registers the current thread to wait on `addr`.
@@ -58,24 +74,19 @@ impl WaitQueue {
         condition: F,
         token: &ThreadToken,
     ) {
-        // Preempting out a thread that holds a spinlock is not great, so we mask off interrupts first
-        let intr_cell = IntrCell::new(());
-        let intr_guard = intr_cell.borrow_mut(ht);
+        let mut wakeup_sets = self.lock_wakeup_sets(ht, token);
 
-        let mut wakeup_sets = self.wakeup_sets.lock();
         if condition() {
             unsafe {
                 ht.release_current(
-                    move |current, _intr_guard| {
+                    move |current| {
                         wakeup_sets
                             .entry(addr)
                             .or_insert(LinkedList::new())
                             .push_back(current);
                         drop(wakeup_sets); // release lock
-                                           // interrupt guard implicitly released
                     },
                     token,
-                    intr_guard,
                 );
             }
         }

@@ -1,4 +1,5 @@
 use super::global_wait_queue;
+use super::IntrGuardMut;
 use crate::memory::VirtualAddress;
 use crate::process::ThreadToken;
 use crate::scheduler::HardwareThread;
@@ -27,12 +28,43 @@ impl<T> Mutex<T> {
         }
     }
 
+    /// Spin-locks a pinned mutex.
+    ///
+    /// Used as a fallback when the current HardwareThread holds any interrupt guards.
+    fn spinlock<'a>(
+        self: Pin<&'a Self>,
+        ht: &'a HardwareThread,
+        token: &'a ThreadToken,
+    ) -> MutexGuard<'a, T> {
+        loop {
+            match self.locked.compare_and_swap(0, 1, Ordering::Acquire) {
+                0 => {
+                    // Lock successful
+                    break MutexGuard {
+                        parent: self,
+                        ht,
+                        token,
+                    };
+                }
+                1 => {
+                    // Lock failed. Retry.
+                }
+                _ => unreachable!("Mutex::spinlock: got lock value other than 0 or 1"),
+            }
+        }
+    }
+
     /// Locks a pinned mutex.
     pub fn lock<'a>(
         self: Pin<&'a Self>,
         ht: &'a HardwareThread,
         token: &'a ThreadToken,
     ) -> MutexGuard<'a, T> {
+        // Fallback when we cannot sleep
+        if ht.has_active_intr_guards() {
+            return self.spinlock(ht, token);
+        }
+
         loop {
             match self.locked.compare_and_swap(0, 1, Ordering::Acquire) {
                 0 => {

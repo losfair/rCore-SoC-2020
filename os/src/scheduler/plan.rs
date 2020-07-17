@@ -1,4 +1,4 @@
-use super::HardwareThreadId;
+use super::HardwareThread;
 use crate::process::{LockedProcess, ProcessId, Thread, ThreadToken};
 use crate::sync::without_interrupts;
 use crate::sync::Mutex;
@@ -20,14 +20,20 @@ pub enum SwitchReason {
     Periodic,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum PolicyContext<'a> {
+    Critical,
+    NonCritical(&'a ThreadToken),
+}
+
 /// A scheduling policy.
 pub trait Policy<T: Send>: Send + Sync {
-    fn add_thread(&self, thread: Box<T>);
+    fn add_thread(&self, ht: &HardwareThread, context: PolicyContext, thread: Box<T>);
     fn next(
         &self,
-        ht_id: HardwareThreadId,
+        ht: &HardwareThread,
+        context: PolicyContext,
         reason: SwitchReason,
-        token: &ThreadToken,
     ) -> Option<Box<T>>;
     fn drain_threads(&mut self) -> Vec<Box<T>>;
 }
@@ -51,14 +57,14 @@ impl<T> SimplePolicy<T> {
 }
 
 impl<T: Send> Policy<T> for SimplePolicy<T> {
-    fn add_thread(&self, thread: Box<T>) {
+    fn add_thread(&self, ht: &HardwareThread, context: PolicyContext, thread: Box<T>) {
         self.run_queue.lock().push_back(thread);
     }
     fn next(
         &self,
-        ht_id: HardwareThreadId,
+        ht: &HardwareThread,
+        context: PolicyContext,
         reason: SwitchReason,
-        _: &ThreadToken,
     ) -> Option<Box<T>> {
         let attempt_switch: bool;
 
@@ -69,7 +75,7 @@ impl<T: Send> Policy<T> for SimplePolicy<T> {
             }
             SwitchReason::Periodic => {
                 // Periodic timer interrupt.
-                let remaining_ticks: &AtomicU32 = &self.remaining_ticks_per_ht[ht_id.0 as usize];
+                let remaining_ticks: &AtomicU32 = &self.remaining_ticks_per_ht[ht.id().0 as usize];
                 attempt_switch = match remaining_ticks.load(Ordering::Relaxed) {
                     0 => {
                         remaining_ticks.store(self.max_ticks, Ordering::Relaxed);
@@ -101,16 +107,16 @@ impl GlobalPlan {
         }
     }
 
-    pub fn add_thread(&self, thread: Box<Thread>) {
-        self.policy.add_thread(thread)
+    pub fn add_thread(&self, ht: &HardwareThread, context: PolicyContext, thread: Box<Thread>) {
+        self.policy.add_thread(ht, context, thread)
     }
 
     pub fn next(
         &self,
-        ht_id: HardwareThreadId,
+        ht: &HardwareThread,
+        context: PolicyContext,
         reason: SwitchReason,
-        token: &ThreadToken,
     ) -> Option<Box<Thread>> {
-        self.policy.next(ht_id, reason, token)
+        self.policy.next(ht, context, reason)
     }
 }

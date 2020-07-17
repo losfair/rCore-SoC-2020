@@ -19,8 +19,8 @@ fn make_init_thread() -> Box<Thread> {
 
 fn init_thread(ht: &HardwareThread, token: &ThreadToken, _: usize, _: usize) -> ! {
     println!("Init thread started.");
-    spawn(Box::new(YieldThread(0)), token).unwrap();
-    spawn(Box::new(YieldThread(1)), token).unwrap();
+    spawn(ht, Box::new(YieldThread(0)), token).unwrap();
+    spawn(ht, Box::new(YieldThread(1)), token).unwrap();
     ht.exit_thread(token);
     let mut i: usize = 0;
     loop {

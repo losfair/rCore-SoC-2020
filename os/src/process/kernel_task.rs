@@ -1,6 +1,6 @@
 use super::{Thread, ThreadToken};
 use crate::error::*;
-use crate::scheduler::{global_plan, HardwareThread};
+use crate::scheduler::{global_plan, HardwareThread, PolicyContext};
 use alloc::boxed::Box;
 use core::mem;
 use core::raw::TraitObject;
@@ -19,9 +19,13 @@ pub fn create_kernel_thread(task: Box<dyn KernelTask>) -> KernelResult<Box<Threa
     Ok(th)
 }
 
-pub fn spawn(task: Box<dyn KernelTask>, token: &ThreadToken) -> KernelResult<()> {
+pub fn spawn(
+    ht: &HardwareThread,
+    task: Box<dyn KernelTask>,
+    token: &ThreadToken,
+) -> KernelResult<()> {
     let th = create_kernel_thread(task)?;
-    global_plan().add_thread(th);
+    global_plan().add_thread(ht, PolicyContext::NonCritical(token), th);
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 use super::EntryReason;
-use super::{GlobalPlan, SwitchReason};
+use super::{GlobalPlan, PolicyContext, SwitchReason};
 use crate::interrupt::{Context, InterruptToken};
 use crate::process::{create_kernel_thread, KernelTask, RawThreadState, Thread, ThreadToken};
 use crate::sbi::set_timer;
@@ -82,6 +82,14 @@ impl HardwareThread {
         ht
     }
 
+    pub fn id(&self) -> Id {
+        self.id
+    }
+
+    pub fn has_active_intr_guards(&self) -> bool {
+        self.num_intr_guards.get() != 0
+    }
+
     pub unsafe fn acquire_intr_guard(&self) {
         // On the same thread. So `Relaxed` works.
         let prev_sie = sstatus::read().sie();
@@ -133,9 +141,14 @@ impl HardwareThread {
                 SchedulerState::Running { previous_thread } => previous_thread,
                 _ => panic!("scheduler_loop: bad previous state"),
             };
-            match self.plan.next(self.id, SwitchReason::Periodic, token) {
+            match self
+                .plan
+                .next(self, PolicyContext::Critical, SwitchReason::Periodic)
+            {
                 Some(next) => {
-                    self.plan.add_thread(previous_thread);
+                    // Re-entrance is possible
+                    self.plan
+                        .add_thread(self, PolicyContext::Critical, previous_thread);
                     unsafe {
                         prepare_scheduler_reentry();
                         self.ll_yield(
@@ -255,6 +268,7 @@ impl HardwareThread {
         ts.leave();
     }
 
+    /// Does not allocate.
     #[inline(never)]
     unsafe fn ll_yield<F: FnOnce(Box<Thread>)>(
         &self,
@@ -330,22 +344,24 @@ impl HardwareThread {
     /// Requires:
     ///
     /// - Thread context
-    /// - Interrupt guard
+    /// - No
     ///
     /// # Safety
     ///
     /// The callback, `f`, is called after `self.current` is no longer the current thread.
     /// This might not be safe, depending on what the callback does.
-    pub unsafe fn release_current<'a, F: FnOnce(Box<Thread>, IntrGuardMut<'a, G>), G>(
-        &self,
-        f: F,
-        token: &ThreadToken,
-        intr_guard: IntrGuardMut<'a, G>,
-    ) {
+    pub unsafe fn release_current<F: FnOnce(Box<Thread>)>(&self, f: F, token: &ThreadToken) {
+        assert!(
+            self.has_active_intr_guards() == false,
+            "release_current: must not hold any interrupt guards"
+        );
         loop {
-            match self.plan.next(self.id, SwitchReason::Yield, token) {
+            match self
+                .plan
+                .next(self, PolicyContext::NonCritical(token), SwitchReason::Yield)
+            {
                 Some(next) => {
-                    self.ll_yield(next, move |th| f(th, intr_guard), token);
+                    self.ll_yield(next, move |th| f(th), token);
                     break;
                 }
                 None => {
@@ -363,9 +379,10 @@ impl HardwareThread {
 
     fn yield_or_exit(&self, token: &ThreadToken, exit: bool) {
         loop {
-            let intr_cell = IntrCell::new(());
-            let intr_guard = intr_cell.borrow_mut(self);
-            match self.plan.next(self.id, SwitchReason::Yield, token) {
+            match self
+                .plan
+                .next(self, PolicyContext::NonCritical(token), SwitchReason::Yield)
+            {
                 Some(next) => {
                     unsafe {
                         self.ll_yield(
@@ -374,9 +391,14 @@ impl HardwareThread {
                                 if exit {
                                     self.will_drop.borrow_mut(self).push_back(old);
                                 } else {
-                                    self.plan.add_thread(old);
+                                    // Although interrupts are disabled, this is not critical
+                                    // because there is no possibility of re-entrance.
+                                    self.plan.add_thread(
+                                        self,
+                                        PolicyContext::NonCritical(token),
+                                        old,
+                                    );
                                 }
-                                drop(intr_guard);
                             },
                             token,
                         );

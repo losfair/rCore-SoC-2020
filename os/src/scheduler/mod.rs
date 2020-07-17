@@ -3,7 +3,7 @@ mod plan;
 mod reason;
 
 pub use hart::{HardwareThread, Id as HardwareThreadId};
-pub use plan::{GlobalPlan, Policy, SimplePolicy, SwitchReason};
+pub use plan::{GlobalPlan, Policy, PolicyContext, SimplePolicy, SwitchReason};
 pub use reason::EntryReason;
 
 use crate::sync::Once;
