@@ -19,7 +19,7 @@ pub struct Thread {
 pub struct ThreadToken(());
 
 impl ThreadToken {
-    pub unsafe fn assume_synchronous_exception(_: &InterruptToken) -> &ThreadToken {
+    pub unsafe fn new() -> &'static ThreadToken {
         static TOKEN: ThreadToken = ThreadToken(());
         &TOKEN
     }

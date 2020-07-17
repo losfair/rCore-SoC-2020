@@ -3,6 +3,7 @@ use super::{GlobalPlan, PolicyContext, SwitchReason};
 use crate::interrupt::{Context, InterruptToken};
 use crate::process::{create_kernel_thread, KernelTask, RawThreadState, Thread, ThreadToken};
 use crate::sbi::set_timer;
+use crate::sync::YieldMutexGuard;
 use crate::sync::{IntrCell, IntrGuardMut};
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
@@ -10,6 +11,7 @@ use alloc::sync::Arc;
 use bit_field::BitField;
 use core::cell::Cell;
 use core::mem;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use riscv::register::{
     sie::{clear_stimer, set_stimer},
@@ -21,13 +23,6 @@ const DEFAULT_SCHEDULER_REENTRY_TIMEOUT: usize = 100000;
 
 extern "C" {
     fn save_gregs_assuming_intr_disabled(context: &mut Context) -> usize;
-}
-
-/// Scheduler state.
-enum SchedulerState {
-    WillLeave,
-    NotRunning { scheduler_thread: Box<Thread> },
-    Running { previous_thread: Box<Thread> },
 }
 
 pub struct HardwareThread {
@@ -50,8 +45,8 @@ pub struct HardwareThread {
     /// Avoid using continuous storage due to how our allocator works.
     will_drop: IntrCell<LinkedList<Box<Thread>>>,
 
-    /// The scheduler state.
-    scheduler_state: IntrCell<SchedulerState>,
+    /// Allocator mutex guard.
+    allocator_mutex_guard: IntrCell<Option<YieldMutexGuard<'static, ()>>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -73,9 +68,7 @@ impl HardwareThread {
             num_intr_guards: Cell::new(0),
             sie_before_intr_guard: Cell::new(true),
             will_drop: IntrCell::new(LinkedList::new()),
-            scheduler_state: IntrCell::new(SchedulerState::NotRunning {
-                scheduler_thread: Self::scheduler_thread(),
-            }),
+            allocator_mutex_guard: IntrCell::new(None),
         });
         ht.populate_thread_state();
 
@@ -88,6 +81,31 @@ impl HardwareThread {
 
     pub fn has_active_intr_guards(&self) -> bool {
         self.num_intr_guards.get() != 0
+    }
+
+    pub fn this_hart() -> &'static Self {
+        let x: &'static HardwareThread;
+        unsafe {
+            llvm_asm!("mv $0, gp" : "=r"(x) :::);
+        }
+        x
+    }
+
+    pub unsafe fn put_allocator_mutex_guard(&self, g: YieldMutexGuard<'static, ()>) {
+        let mut place = self.allocator_mutex_guard.borrow_mut(self);
+        assert!(
+            place.is_none(),
+            "put_allocator_mutex_guard: precondition failed"
+        );
+        *place = Some(g);
+    }
+
+    pub unsafe fn drop_allocator_mutex_guard(&self) {
+        let mut prev = self.allocator_mutex_guard.borrow_mut(self).take();
+        assert!(
+            prev.is_some(),
+            "drop_allocator_mutex_guard: precondition failed"
+        );
     }
 
     pub unsafe fn acquire_intr_guard(&self) {
@@ -114,68 +132,30 @@ impl HardwareThread {
         }
     }
 
-    fn scheduler_thread() -> Box<Thread> {
-        struct SchedulerThread;
-        impl KernelTask for SchedulerThread {
-            fn run(self: Box<Self>, ht: &HardwareThread, token: &ThreadToken) {
-                drop(self);
-                ht.scheduler_loop(token)
+    fn run_scheduler(&self, token: &InterruptToken) -> ! {
+        // Drop all threads in `will_drop`.
+        /*
+        for th in mem::replace(&mut *self.will_drop.borrow_mut(self), LinkedList::new()) {
+            unsafe {
+                th.drop_assuming_not_current();
             }
         }
-        create_kernel_thread(Box::new(SchedulerThread)).unwrap()
-    }
-
-    fn scheduler_loop(&self, token: &ThreadToken) -> ! {
-        loop {
-            // Drop all threads in `will_drop`.
-            for th in mem::replace(&mut *self.will_drop.borrow_mut(self), LinkedList::new()) {
-                unsafe {
-                    th.drop_assuming_not_current();
-                }
+        */
+        // Choose next thread to run.
+        match self
+            .plan
+            .next(self, PolicyContext::Critical, SwitchReason::Periodic)
+        {
+            Some(next) => {
+                let old = self.replace_current(next);
+                self.plan.add_thread(self, PolicyContext::Critical, old);
+                prepare_scheduler_reentry();
+                self.return_to_current(token)
             }
-            // Choose next thread to run.
-            let previous_thread = match mem::replace(
-                &mut *self.scheduler_state.borrow_mut(self),
-                SchedulerState::WillLeave,
-            ) {
-                SchedulerState::Running { previous_thread } => previous_thread,
-                _ => panic!("scheduler_loop: bad previous state"),
-            };
-            match self
-                .plan
-                .next(self, PolicyContext::Critical, SwitchReason::Periodic)
-            {
-                Some(next) => {
-                    // Re-entrance is possible
-                    self.plan
-                        .add_thread(self, PolicyContext::Critical, previous_thread);
-                    unsafe {
-                        prepare_scheduler_reentry();
-                        self.ll_yield(
-                            next,
-                            |old| {
-                                *self.scheduler_state.borrow_mut(self) =
-                                    SchedulerState::NotRunning {
-                                        scheduler_thread: old,
-                                    };
-                            },
-                            token,
-                        );
-                    }
-                }
-                None => unsafe {
-                    prepare_scheduler_reentry();
-                    self.ll_yield(
-                        previous_thread,
-                        |old| {
-                            *self.scheduler_state.borrow_mut(self) = SchedulerState::NotRunning {
-                                scheduler_thread: old,
-                            };
-                        },
-                        token,
-                    );
-                },
-            }
+            None => unsafe {
+                prepare_scheduler_reentry();
+                self.return_to_current(token);
+            },
         }
     }
 
@@ -234,7 +214,7 @@ impl HardwareThread {
                 }
                 self.tick(token);
             }
-            EntryReason::Breakpoint(addr, thread_token) => {
+            EntryReason::Breakpoint(addr) => {
                 println!("Breakpoint at {:p}", addr as *mut ());
                 self.return_to_current(token);
             }
@@ -253,6 +233,7 @@ impl HardwareThread {
 
     pub unsafe fn start(&self) -> ! {
         prepare_scheduler_reentry();
+        set_stimer();
         self.force_return_to_current();
     }
 
@@ -341,15 +322,12 @@ impl HardwareThread {
 
     /// Releases the current thread and switches to a new thread.
     ///
-    /// Requires:
-    ///
-    /// - Thread context
-    /// - No
-    ///
     /// # Safety
     ///
     /// The callback, `f`, is called after `self.current` is no longer the current thread.
     /// This might not be safe, depending on what the callback does.
+    ///
+    /// The callback is called with interrupts disabled, so it must not allocate.
     pub unsafe fn release_current<F: FnOnce(Box<Thread>)>(&self, f: F, token: &ThreadToken) {
         assert!(
             self.has_active_intr_guards() == false,
@@ -378,6 +356,10 @@ impl HardwareThread {
     }
 
     fn yield_or_exit(&self, token: &ThreadToken, exit: bool) {
+        assert!(
+            self.has_active_intr_guards() == false,
+            "yield_or_exit: must not hold any interrupt guards"
+        );
         loop {
             match self
                 .plan
@@ -389,13 +371,13 @@ impl HardwareThread {
                             next,
                             move |old| {
                                 if exit {
-                                    self.will_drop.borrow_mut(self).push_back(old);
+                                    mem::forget(old);
+                                // FIXME: De-allocate properly
+                                //self.will_drop.borrow_mut(self).push_back(old);
                                 } else {
-                                    // Although interrupts are disabled, this is not critical
-                                    // because there is no possibility of re-entrance.
                                     self.plan.add_thread(
                                         self,
-                                        PolicyContext::NonCritical(token),
+                                        PolicyContext::Critical, // interrupts disabled
                                         old,
                                     );
                                 }
@@ -421,33 +403,11 @@ impl HardwareThread {
     }
 
     fn tick(&self, token: &InterruptToken) -> ! {
-        // Mask off timer interrupt, until the scheduler thread re-enables it.
-        unsafe {
-            clear_stimer();
-        }
-
-        // Temporarily take out scheduler_state
-        let prev_state = mem::replace(
-            &mut *self.scheduler_state.borrow_mut(self),
-            SchedulerState::WillLeave,
-        );
-        match prev_state {
-            SchedulerState::NotRunning { scheduler_thread } => {
-                // Switch to scheduler.
-                let previous_thread = self.replace_current(scheduler_thread);
-                *self.scheduler_state.borrow_mut(self) =
-                    SchedulerState::Running { previous_thread };
-                self.return_to_current(token);
-            }
-            _ => panic!("tick: bad scheduler state"),
-        }
+        self.run_scheduler(token)
     }
 }
 
 /// Sets up the timer for kernel re-entry.
 fn prepare_scheduler_reentry() {
     set_timer(time::read() + DEFAULT_SCHEDULER_REENTRY_TIMEOUT);
-    unsafe {
-        set_stimer();
-    }
 }

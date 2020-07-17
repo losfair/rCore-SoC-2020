@@ -11,8 +11,10 @@ use spin::{Mutex as SpinMutex, MutexGuard as SpinMutexGuard};
 static GLOBAL_WAIT_QUEUE: WaitQueue = WaitQueue::new();
 
 pub struct WaitQueue {
-    wakeup_sets: SpinMutex<BTreeMap<PhysicalAddress, LinkedList<Box<Thread>>>>,
+    wakeup_sets: SpinMutex<WakeupSet>,
 }
+
+type WakeupSet = BTreeMap<PhysicalAddress, LinkedList<Option<Box<Thread>>>>;
 
 impl WaitQueue {
     const fn new() -> WaitQueue {
@@ -25,7 +27,7 @@ impl WaitQueue {
         &'a self,
         ht: &HardwareThread,
         token: &ThreadToken,
-    ) -> SpinMutexGuard<'a, BTreeMap<PhysicalAddress, LinkedList<Box<Thread>>>> {
+    ) -> SpinMutexGuard<'a, WakeupSet> {
         assert!(
             ht.has_active_intr_guards() == false,
             "lock_wakeup_sets: bad has_active_intr_guards"
@@ -44,13 +46,18 @@ impl WaitQueue {
     ///
     /// Must only be called from a thread context because of possible allocator reentry.
     pub fn wake_one(&self, ht: &HardwareThread, addr: PhysicalAddress, token: &ThreadToken) {
+        assert!(
+            ht.has_active_intr_guards() == false,
+            "wake_one: bad has_active_intr_guards"
+        );
         let mut wakeup_sets = self.lock_wakeup_sets(ht, token);
 
         let th = match wakeup_sets.get_mut(&addr) {
             Some(s) => {
                 let elem = s
                     .pop_front()
-                    .expect("WaitQueue::wake_one: empty wait queue in non-empty entry");
+                    .expect("WaitQueue::wake_one: empty wait queue in non-empty entry")
+                    .expect("WaitQueue::wake_one: got empty thread");
                 if s.len() == 0 {
                     wakeup_sets.remove(&addr).unwrap();
                 }
@@ -58,6 +65,8 @@ impl WaitQueue {
             }
             None => None,
         };
+
+        drop(wakeup_sets);
 
         if let Some(th) = th {
             global_plan().add_thread(ht, PolicyContext::NonCritical(token), th);
@@ -74,17 +83,22 @@ impl WaitQueue {
         condition: F,
         token: &ThreadToken,
     ) {
+        assert!(
+            ht.has_active_intr_guards() == false,
+            "wait: bad has_active_intr_guards"
+        );
         let mut wakeup_sets = self.lock_wakeup_sets(ht, token);
 
         if condition() {
+            let entry = wakeup_sets.entry(addr).or_insert(LinkedList::new());
+            entry.push_back(None);
+            let place: *mut Option<Box<Thread>> = entry.back_mut().unwrap();
+
             unsafe {
                 ht.release_current(
                     move |current| {
-                        wakeup_sets
-                            .entry(addr)
-                            .or_insert(LinkedList::new())
-                            .push_back(current);
-                        drop(wakeup_sets); // release lock
+                        *place = Some(current);
+                        drop(wakeup_sets); // release spin lock
                     },
                     token,
                 );

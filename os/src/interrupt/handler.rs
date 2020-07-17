@@ -59,12 +59,7 @@ pub extern "C" fn handle_interrupt(context: &mut Context, scause: Scause, stval:
 fn on_breakpoint(ts: &mut RawThreadState, token: &InterruptToken) -> ! {
     let bkpt_addr = ts.last_context_mut().sepc;
     ts.last_context_mut().sepc += 2;
-    unsafe {
-        ts.enter_kernel(
-            token,
-            EntryReason::Breakpoint(bkpt_addr, ThreadToken::assume_synchronous_exception(token)),
-        )
-    }
+    unsafe { ts.enter_kernel(token, EntryReason::Breakpoint(bkpt_addr)) }
 }
 
 fn on_stimer(ts: &mut RawThreadState, token: &InterruptToken) -> ! {

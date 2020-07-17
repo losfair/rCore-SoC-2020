@@ -1,9 +1,11 @@
+use crate::allocator;
 use crate::memory::boot_page_pool;
 use crate::process::{spawn, KernelTask, LockedProcess, Thread, ThreadToken};
 use crate::scheduler::{global_plan, HardwareThread, HardwareThreadId};
 use crate::sync::lock;
 use alloc::boxed::Box;
 use core::pin::Pin;
+
 pub fn start() -> ! {
     let mut ht = HardwareThread::new(
         HardwareThreadId(0),
@@ -18,7 +20,11 @@ fn make_init_thread() -> Box<Thread> {
 }
 
 fn init_thread(ht: &HardwareThread, token: &ThreadToken, _: usize, _: usize) -> ! {
-    println!("Init thread started.");
+    allocator::enable_locking();
+    println!(
+        "Init thread started. has_active_intr_guards = {}",
+        ht.has_active_intr_guards()
+    );
     spawn(ht, Box::new(YieldThread(0)), token).unwrap();
     spawn(ht, Box::new(YieldThread(1)), token).unwrap();
     ht.exit_thread(token);
@@ -52,7 +58,6 @@ impl KernelTask for YieldThread {
             }
             println!("thread {} will release mutex", self.0);
             drop(guard);
-            ht.do_yield(token);
             ht.do_yield(token);
         }
     }

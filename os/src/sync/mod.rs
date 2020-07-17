@@ -1,8 +1,10 @@
 pub mod lock;
 mod waitqueue;
+mod yield_mutex;
 
 pub use spin::{Mutex, MutexGuard, Once};
 pub use waitqueue::{global_wait_queue, WaitQueue};
+pub use yield_mutex::{YieldMutex, YieldMutexGuard};
 
 use crate::interrupt::InterruptToken;
 use crate::scheduler::HardwareThread;
@@ -29,6 +31,10 @@ impl<T> IntrCell<T> {
             inner: ManuallyDrop::new(self.inner.borrow_mut()),
             ht,
         }
+    }
+
+    pub fn borrow_mut_intr<'a>(&'a self, _: &'a InterruptToken) -> RefMut<'a, T> {
+        self.inner.borrow_mut()
     }
 }
 
