@@ -66,15 +66,16 @@ impl WaitQueue {
         if condition() {
             unsafe {
                 ht.release_current(
-                    move |current| {
+                    move |current, _intr_guard| {
                         wakeup_sets
                             .entry(addr)
                             .or_insert(LinkedList::new())
                             .push_back(current);
                         drop(wakeup_sets); // release lock
-                        drop(intr_guard); // release interrupt guard
+                                           // interrupt guard implicitly released
                     },
                     token,
+                    intr_guard,
                 );
             }
         }

@@ -40,11 +40,12 @@ impl LockedPagePool {
     }
 
     pub fn allocate(&self) -> KernelResult<VirtualPageNumber> {
-        self.0.lock().allocate()
+        let result = self.0.lock().allocate();
+        result
     }
 
     pub fn free(&self, vpn: VirtualPageNumber) {
-        self.0.lock().free(vpn)
+        self.0.lock().free(vpn);
     }
 }
 

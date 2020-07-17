@@ -3,7 +3,7 @@ use super::{GlobalPlan, SwitchReason};
 use crate::interrupt::{Context, InterruptToken};
 use crate::process::{create_kernel_thread, KernelTask, RawThreadState, Thread, ThreadToken};
 use crate::sbi::set_timer;
-use crate::sync::IntrCell;
+use crate::sync::{IntrCell, IntrGuardMut};
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 use alloc::sync::Arc;
@@ -325,11 +325,27 @@ impl HardwareThread {
         self.yield_or_exit(token, false);
     }
 
-    pub unsafe fn release_current<F: FnOnce(Box<Thread>)>(&self, f: F, token: &ThreadToken) {
+    /// Releases the current thread and switches to a new thread.
+    ///
+    /// Requires:
+    ///
+    /// - Thread context
+    /// - Interrupt guard
+    ///
+    /// # Safety
+    ///
+    /// The callback, `f`, is called after `self.current` is no longer the current thread.
+    /// This might not be safe, depending on what the callback does.
+    pub unsafe fn release_current<'a, F: FnOnce(Box<Thread>, IntrGuardMut<'a, G>), G>(
+        &self,
+        f: F,
+        token: &ThreadToken,
+        intr_guard: IntrGuardMut<'a, G>,
+    ) {
         loop {
             match self.plan.next(self.id, SwitchReason::Yield, token) {
                 Some(next) => {
-                    self.ll_yield(next, f, token);
+                    self.ll_yield(next, move |th| f(th, intr_guard), token);
                     break;
                 }
                 None => {
@@ -347,17 +363,20 @@ impl HardwareThread {
 
     fn yield_or_exit(&self, token: &ThreadToken, exit: bool) {
         loop {
+            let intr_cell = IntrCell::new(());
+            let intr_guard = intr_cell.borrow_mut(self);
             match self.plan.next(self.id, SwitchReason::Yield, token) {
                 Some(next) => {
                     unsafe {
                         self.ll_yield(
                             next,
-                            |old| {
+                            move |old| {
                                 if exit {
                                     self.will_drop.borrow_mut(self).push_back(old);
                                 } else {
                                     self.plan.add_thread(old);
                                 }
+                                drop(intr_guard);
                             },
                             token,
                         );
