@@ -21,14 +21,17 @@ pub fn init() {
     println!("allocator: Initialized.");
 }
 
-pub fn enable_locking() {
-    unsafe {
-        assert!(
-            LOCKING == false,
-            "allocator::enable_locking: attempting to enable locking twice"
-        );
-        LOCKING = true;
-    }
+/// Enables locking for the global allocator.
+///
+/// # Safety
+///
+/// Can only be called once from the init thread, and before any non-init thread is created.
+pub unsafe fn enable_locking() {
+    assert!(
+        LOCKING == false,
+        "allocator::enable_locking: attempting to enable locking twice"
+    );
+    LOCKING = true;
     println!("allocator: Locking enabled.");
 }
 

@@ -1,9 +1,10 @@
 use super::{LockedPagePool, Mapping, PageTableEntryFlags, Segment, SegmentBacking};
 use crate::error::*;
 use crate::layout;
+use crate::process::ThreadToken;
 
-pub unsafe fn remap_kernel(pool: LockedPagePool) -> KernelResult<Mapping> {
-    let mut mapping = Mapping::new(pool)?;
+pub unsafe fn remap_kernel(pool: LockedPagePool, token: &ThreadToken) -> KernelResult<Mapping> {
+    let mut mapping = Mapping::new_without_kernel_region(pool, token)?;
     let ksegs: &[Segment] = &[
         Segment {
             range: layout::text_start().vpn()..layout::rodata_start().vpn(),
@@ -41,8 +42,8 @@ pub unsafe fn remap_kernel(pool: LockedPagePool) -> KernelResult<Mapping> {
         },
     ];
     for seg in ksegs {
-        mapping.map_segment(seg)?;
+        mapping.map_segment(seg, token)?;
     }
-    mapping.activate();
+    mapping.activate_thread(token);
     Ok(mapping)
 }

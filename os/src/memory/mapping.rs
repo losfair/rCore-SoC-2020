@@ -5,6 +5,9 @@ use super::{
 };
 use crate::error::*;
 use crate::layout;
+use crate::process::ThreadToken;
+use crate::scheduler::HardwareThread;
+use crate::sync::without_interrupts;
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -22,6 +25,8 @@ pub struct Mapping {
 
     /// Page pool from which pages in this mapping are allocated from.
     pool: LockedPagePool,
+
+    ready_for_auto_drop: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -38,19 +43,30 @@ pub enum SegmentBacking {
 }
 
 impl Mapping {
-    pub fn new(pool: LockedPagePool) -> KernelResult<Self> {
-        let root_table = PageTable::new(pool.clone())?;
+    pub unsafe fn new_without_kernel_region(
+        pool: LockedPagePool,
+        token: &ThreadToken,
+    ) -> KernelResult<Self> {
+        let root_table = PageTable::new(pool.clone(), token)?;
         let root_ppn = root_table.ppn();
         Ok(Mapping {
             tables: vec![root_table],
             owned_pages: vec![],
             root_ppn,
             pool,
+            ready_for_auto_drop: false,
         })
     }
 
-    pub fn fork(&self, pool: LockedPagePool) -> KernelResult<Self> {
-        let mut new_mapping = Mapping::new(pool)?;
+    pub fn release(mut self, token: &ThreadToken) {
+        for &vpn in &self.owned_pages {
+            self.pool.free(vpn, token);
+        }
+        self.ready_for_auto_drop = true;
+    }
+
+    pub fn fork(&self, pool: LockedPagePool, token: &ThreadToken) -> KernelResult<Self> {
+        let mut new_mapping = unsafe { Mapping::new_without_kernel_region(pool, token)? };
 
         let ram_mapping_vpn = layout::ram_start().vpn();
         let levels = ram_mapping_vpn.levels();
@@ -66,7 +82,11 @@ impl Mapping {
         Ok(new_mapping)
     }
 
-    pub fn entry(&mut self, vpn: VirtualPageNumber) -> KernelResult<&mut PageTableEntry> {
+    pub fn entry(
+        &mut self,
+        vpn: VirtualPageNumber,
+        token: &ThreadToken,
+    ) -> KernelResult<&mut PageTableEntry> {
         let root_table_ptr: *mut PageTable = self
             .root_ppn
             .start_address()
@@ -77,7 +97,7 @@ impl Mapping {
         for subindex in &vpn.levels()[1..] {
             if entry.is_empty() {
                 //println!("Heap usage before: {}", crate::allocator::heap_usage());
-                let new_table = PageTable::new(self.pool.clone())?;
+                let new_table = PageTable::new(self.pool.clone(), token)?;
                 //println!("Heap usage after: {}", crate::allocator::heap_usage());
                 let new_ppn = new_table.ppn();
                 self.tables.push(new_table);
@@ -93,13 +113,14 @@ impl Mapping {
         vpn: VirtualPageNumber,
         ppn: PhysicalPageNumber,
         flags: PageTableEntryFlags,
+        token: &ThreadToken,
     ) -> KernelResult<()> {
-        let entry = self.entry(vpn)?;
+        let entry = self.entry(vpn, token)?;
         *entry = PageTableEntry::new(ppn, flags);
         Ok(())
     }
 
-    pub fn map_segment(&mut self, seg: &Segment) -> KernelResult<()> {
+    pub fn map_segment(&mut self, seg: &Segment, token: &ThreadToken) -> KernelResult<()> {
         println!("Mapping segment: {:x?}", seg);
         for vpn in seg.range.start.0..seg.range.end.0 {
             let vpn = VirtualPageNumber(vpn);
@@ -108,10 +129,10 @@ impl Mapping {
                     // Calculate the physical address of the backing frame.
                     let page_offset = vpn.0 - seg.range.start.0;
                     phys_start.0 += page_offset;
-                    self.map_one(vpn, phys_start, seg.flags)?;
+                    self.map_one(vpn, phys_start, seg.flags, token)?;
                 }
                 SegmentBacking::Owned => {
-                    let kernel_vpn = self.pool.allocate()?;
+                    let kernel_vpn = self.pool.allocate(token)?;
                     self.owned_pages.push(kernel_vpn);
                     self.map_one(
                         vpn,
@@ -119,6 +140,7 @@ impl Mapping {
                             .to_phys()
                             .expect("Mapping::map_segment: bad kernel vpn for owned segment"),
                         seg.flags,
+                        token,
                     )?;
                 }
             }
@@ -126,17 +148,22 @@ impl Mapping {
         Ok(())
     }
 
-    pub unsafe fn activate(&self) {
+    /// Activates this mapping in a thread context.
+    ///
+    /// This method is safe because each `Mapping` is guaranteed to include the kernel region.
+    pub fn activate_thread(&self, _: &ThreadToken) {
         let new_satp = self.root_ppn.0 | (8 << 60); // Sv39
-        llvm_asm!("csrw satp, $0" :: "r"(new_satp) :: "volatile");
-        llvm_asm!("sfence.vma" :::: "volatile");
+        without_interrupts(HardwareThread::this_hart(), || unsafe {
+            llvm_asm!("csrw satp, $0" :: "r"(new_satp) :: "volatile");
+            llvm_asm!("sfence.vma" :::: "volatile");
+        });
     }
 }
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        for &vpn in &self.owned_pages {
-            self.pool.free(vpn);
+        if !self.ready_for_auto_drop {
+            panic!("Mapping::drop: release() not called");
         }
     }
 }

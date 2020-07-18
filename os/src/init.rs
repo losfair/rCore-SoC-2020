@@ -1,5 +1,5 @@
 use crate::allocator;
-use crate::memory::boot_page_pool;
+use crate::memory::{boot_page_pool, remap_kernel};
 use crate::process::{spawn, KernelTask, LockedProcess, Thread, ThreadToken};
 use crate::sbi;
 use crate::scheduler::{global_plan, HardwareThread, HardwareThreadId};
@@ -21,7 +21,14 @@ fn make_init_thread() -> Box<Thread> {
 }
 
 fn init_thread(ht: &HardwareThread, token: &ThreadToken, _: usize, _: usize) -> ! {
-    allocator::enable_locking();
+    unsafe {
+        // Enable the global allocator lock.
+        allocator::enable_locking();
+
+        // Apply necessary memory protections.
+        remap_kernel(token);
+    }
+
     println!("Init thread started.");
 
     run_tests(ht, token);

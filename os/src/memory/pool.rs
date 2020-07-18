@@ -1,11 +1,13 @@
 use super::{VirtualAddress, VirtualPageNumber};
 use crate::error::*;
-use crate::sync::Mutex;
+use crate::process::ThreadToken;
+use crate::sync::lock::Mutex;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::btree_set::BTreeSet;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::pin::Pin;
 
 const PAGES_PER_SET: u8 = 64; // 256 KB
 
@@ -19,7 +21,7 @@ pub struct PagePool {
 }
 
 #[derive(Clone)]
-pub struct LockedPagePool(Arc<Mutex<PagePool>>);
+pub struct LockedPagePool(Pin<Arc<Mutex<PagePool>>>);
 
 struct PageSetInfo {
     set: Box<PageSet>,
@@ -36,16 +38,16 @@ struct Page([u8; 4096]);
 
 impl LockedPagePool {
     pub fn new() -> LockedPagePool {
-        LockedPagePool(Arc::new(Mutex::new(PagePool::new())))
+        LockedPagePool(Arc::pin(Mutex::new(PagePool::new())))
     }
 
-    pub fn allocate(&self) -> KernelResult<VirtualPageNumber> {
-        let result = self.0.lock().allocate();
+    pub fn allocate(&self, token: &ThreadToken) -> KernelResult<VirtualPageNumber> {
+        let result = self.0.as_ref().lock(token).allocate();
         result
     }
 
-    pub fn free(&self, vpn: VirtualPageNumber) {
-        self.0.lock().free(vpn);
+    pub fn free(&self, vpn: VirtualPageNumber, token: &ThreadToken) {
+        self.0.as_ref().lock(token).free(vpn);
     }
 }
 

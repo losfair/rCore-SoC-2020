@@ -1,6 +1,7 @@
 use super::LockedPagePool;
 use super::{PhysicalPageNumber, VirtualAddress};
 use crate::error::*;
+use crate::process::ThreadToken;
 use bit_field::BitField;
 use bitflags::bitflags;
 use core::ops::{Deref, DerefMut};
@@ -14,14 +15,25 @@ pub struct Table {
 pub struct TableHandle {
     table: *mut Table,
     pool: LockedPagePool,
+    ready_for_auto_drop: bool,
 }
 
 unsafe impl Send for TableHandle {}
 unsafe impl Sync for TableHandle {}
 
+impl TableHandle {
+    fn release(mut self, token: &ThreadToken) {
+        self.pool
+            .free(VirtualAddress::from(self.table).vpn(), token);
+        self.ready_for_auto_drop = true;
+    }
+}
+
 impl Drop for TableHandle {
     fn drop(&mut self) {
-        self.pool.free(VirtualAddress::from(self.table).vpn());
+        if !self.ready_for_auto_drop {
+            panic!("TableHandle::drop: not ready for drop");
+        }
     }
 }
 
@@ -39,10 +51,11 @@ impl DerefMut for TableHandle {
 }
 
 impl Table {
-    pub fn new(pool: LockedPagePool) -> KernelResult<TableHandle> {
-        pool.allocate().map(|vpn| TableHandle {
+    pub fn new(pool: LockedPagePool, token: &ThreadToken) -> KernelResult<TableHandle> {
+        pool.allocate(token).map(|vpn| TableHandle {
             table: vpn.start_address().as_mut_ptr(),
             pool: pool.clone(),
+            ready_for_auto_drop: false,
         })
     }
 
