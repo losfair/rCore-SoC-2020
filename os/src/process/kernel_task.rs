@@ -1,6 +1,6 @@
 use super::{Thread, ThreadToken};
 use crate::error::*;
-use crate::scheduler::{global_plan, HardwareThread, PolicyContext};
+use crate::scheduler::{HardwareThread, PolicyContext};
 use alloc::boxed::Box;
 use core::mem;
 use core::raw::TraitObject;
@@ -25,7 +25,8 @@ pub fn spawn(
     token: &ThreadToken,
 ) -> KernelResult<()> {
     let th = create_kernel_thread(task)?;
-    global_plan().add_thread(ht, PolicyContext::NonCritical(token), th);
+    ht.policy()
+        .add_thread(ht, PolicyContext::NonCritical(token), th);
     Ok(())
 }
 

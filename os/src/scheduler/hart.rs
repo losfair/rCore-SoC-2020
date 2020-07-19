@@ -1,10 +1,10 @@
 use super::EntryReason;
-use super::{GlobalPlan, PolicyContext, SwitchReason};
+use super::{Policy, PolicyContext, SwitchReason};
 use crate::interrupt::{Context, InterruptToken};
 use crate::process::{create_kernel_thread, KernelTask, RawThreadState, Thread, ThreadToken};
 use crate::sbi::set_timer;
 use crate::sync::YieldMutexGuard;
-use crate::sync::{IntrCell, IntrGuardMut};
+use crate::sync::{without_interrupts, IntrCell, IntrGuardMut};
 use alloc::boxed::Box;
 use alloc::collections::linked_list::LinkedList;
 use alloc::sync::Arc;
@@ -27,7 +27,7 @@ extern "C" {
 
 pub struct HardwareThread {
     id: Id,
-    plan: Arc<GlobalPlan>,
+    policy: Box<dyn Policy<Thread>>,
 
     /// # of `IntrGuard`s currently active on this hardware thread.
     num_intr_guards: Cell<usize>,
@@ -60,10 +60,14 @@ impl Drop for HardwareThread {
 }
 
 impl HardwareThread {
-    pub fn new(id: Id, plan: Arc<GlobalPlan>, initial_thread: Box<Thread>) -> Pin<Box<Self>> {
+    pub fn new(
+        id: Id,
+        policy: Box<dyn Policy<Thread>>,
+        initial_thread: Box<Thread>,
+    ) -> Pin<Box<Self>> {
         let ht = Box::pin(HardwareThread {
             id,
-            plan,
+            policy,
             current: IntrCell::new(initial_thread),
             num_intr_guards: Cell::new(0),
             sie_before_intr_guard: Cell::new(true),
@@ -89,6 +93,10 @@ impl HardwareThread {
             llvm_asm!("mv $0, gp" : "=r"(x) :::);
         }
         x
+    }
+
+    pub fn policy(&self) -> &dyn Policy<Thread> {
+        &*self.policy
     }
 
     pub unsafe fn put_allocator_mutex_guard(&self, g: YieldMutexGuard<'static, ()>) {
@@ -143,12 +151,12 @@ impl HardwareThread {
         */
         // Choose next thread to run.
         match self
-            .plan
+            .policy
             .next(self, PolicyContext::Critical, SwitchReason::Periodic)
         {
             Some(next) => {
                 let old = self.replace_current(next);
-                self.plan.add_thread(self, PolicyContext::Critical, old);
+                self.policy.add_thread(self, PolicyContext::Critical, old);
                 prepare_scheduler_reentry();
                 self.return_to_current(token)
             }
@@ -336,7 +344,7 @@ impl HardwareThread {
         );
         loop {
             match self
-                .plan
+                .policy
                 .next(self, PolicyContext::NonCritical(token), SwitchReason::Yield)
             {
                 Some(next) => {
@@ -356,16 +364,20 @@ impl HardwareThread {
         ret
     }
 
+    /// Switches out of the current thread, either for yielding or exiting.
+    ///
+    /// Does not allocate, so can be used from the allocator.
     fn yield_or_exit(&self, token: &ThreadToken, exit: bool) {
         assert!(
             self.has_active_intr_guards() == false,
             "yield_or_exit: must not hold any interrupt guards"
         );
         loop {
-            match self
-                .plan
-                .next(self, PolicyContext::NonCritical(token), SwitchReason::Yield)
-            {
+            let next = without_interrupts(self, || {
+                self.policy
+                    .next(self, PolicyContext::Critical, SwitchReason::Yield)
+            });
+            match next {
                 Some(next) => {
                     unsafe {
                         self.ll_yield(
@@ -376,7 +388,7 @@ impl HardwareThread {
                                 // FIXME: De-allocate properly
                                 //self.will_drop.borrow_mut(self).push_back(old);
                                 } else {
-                                    self.plan.add_thread(
+                                    self.policy.add_thread(
                                         self,
                                         PolicyContext::Critical, // interrupts disabled
                                         old,

@@ -144,8 +144,22 @@ impl Thread {
         }
     }
 
+    pub fn raw_thread_state(&self) -> &RawThreadState {
+        unsafe { &*self.raw_thread_state_mut_ptr() }
+    }
+
     pub fn raw_thread_state_mut(&mut self) -> &mut RawThreadState {
         unsafe { &mut *self.raw_thread_state_mut_ptr() }
+    }
+
+    pub fn can_migrate(&self) -> bool {
+        if !self.raw_thread_state().was_user() {
+            // We cannot migrate a thread in kernel mode, because it might have non-`Send` objects
+            // on its stack (e.g. `&HardwareThread`).
+            false
+        } else {
+            true
+        }
     }
 }
 

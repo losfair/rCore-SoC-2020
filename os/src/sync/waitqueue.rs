@@ -2,7 +2,7 @@ use super::{without_interrupts, IntrCell};
 use crate::memory::PhysicalAddress;
 use crate::process::Thread;
 use crate::process::ThreadToken;
-use crate::scheduler::{global_plan, HardwareThread, PolicyContext};
+use crate::scheduler::{HardwareThread, PolicyContext};
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::linked_list::LinkedList;
@@ -69,7 +69,8 @@ impl WaitQueue {
         drop(wakeup_sets);
 
         if let Some(th) = th {
-            global_plan().add_thread(ht, PolicyContext::NonCritical(token), th);
+            ht.policy()
+                .add_thread(ht, PolicyContext::NonCritical(token), th);
         }
     }
 
