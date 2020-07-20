@@ -24,6 +24,12 @@ pub fn init() {
     println!("interrupt/handler: Initialized.");
 }
 
+pub unsafe fn ap_init() {
+    unsafe {
+        stvec::write(__interrupt as usize, stvec::TrapMode::Direct);
+    }
+}
+
 /// High-level interrupt entry.
 ///
 /// If we were in user mode, then `context` is the first member of a `RawThreadState`.

@@ -12,9 +12,13 @@ or t0, t0, t1
 csrw satp, t0
 sfence.vma
 
+# Calculate per-core boot stack offset.
+slli t1, a0, 16 # mul 65536
+
 # Load boot stack.
 li t0, 0xffffffff00000000
 la sp, boot_stack_top
+sub sp, sp, t1
 or sp, sp, t0
 
 # Calculate virtual address of rust_main.
@@ -38,6 +42,6 @@ boot_page_table:
 .section .bss.stack
 .globl boot_stack
 boot_stack:
-.space 4096 * 16 # 64 KBytes
+.space 65536 * 16 # 64 KBytes, 16 cores max
 .globl boot_stack_top
 boot_stack_top:

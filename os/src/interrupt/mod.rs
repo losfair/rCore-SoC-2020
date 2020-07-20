@@ -11,3 +11,7 @@ pub fn init() {
 
     println!("interrupt: Initialized.");
 }
+
+pub unsafe fn ap_init() {
+    handler::ap_init();
+}

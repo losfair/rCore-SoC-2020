@@ -26,6 +26,7 @@ mod panic;
 mod process;
 mod sbi;
 mod scheduler;
+mod smp;
 mod sync;
 mod tests;
 mod user;
@@ -40,11 +41,19 @@ global_asm!(include_str!("entry.asm"));
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
 #[no_mangle]
-pub extern "C" fn rust_main(_hart_id: usize, dtb_pa: PhysicalAddress) -> ! {
-    println!(
-        "Kernel loaded. Hart ID = {}, DTB physical address = {:x?}",
-        _hart_id, dtb_pa
-    );
+pub unsafe extern "C" fn rust_main(hart_id: u32, dtb_pa: PhysicalAddress) -> ! {
+    let x: u32 = 42;
+    if hart_id == 0 {
+        kernel_boot(dtb_pa);
+    } else {
+        smp::ap_boot(hart_id);
+    }
+}
+
+unsafe fn kernel_boot(dtb_pa: PhysicalAddress) -> ! {
+    println!("Kernel booting on Hart 0. DTB: {:x?}", dtb_pa);
+    smp::wait_for_ap();
+    println!("Number of Harts: {}", smp::num_harts());
     layout::print();
     allocator::init();
     memory::init();

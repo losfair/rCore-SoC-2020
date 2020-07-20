@@ -27,6 +27,12 @@ unsafe fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize
     ret
 }
 
+pub unsafe fn send_ipi(hart_mask: *const usize) {
+    unsafe {
+        sbi_call(SBI_SEND_IPI, hart_mask as _, 0, 0);
+    }
+}
+
 /// Writes a character to the console.
 pub fn console_putchar(c: u8) {
     unsafe {
