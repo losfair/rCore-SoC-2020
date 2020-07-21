@@ -19,7 +19,7 @@ pub fn wait_for_ap() {
 }
 
 pub unsafe fn ap_boot(hart_id: u32) -> ! {
-    //interrupt::ap_init();
+    interrupt::ap_init();
     NUM_HARTS.fetch_add(1, Ordering::Relaxed);
     while CURRENT_BOOTING.load(Ordering::SeqCst) != hart_id {}
     init::ap_start(hart_id);

@@ -73,7 +73,14 @@ fn apd_thread(ht: &HardwareThread, token: &ThreadToken, _: usize, _: usize) -> !
     unsafe {
         smp::set_ap_boot_done();
     }
-    loop {}
+    loop {
+        for _ in 0..1000000 {
+            unsafe {
+                llvm_asm!("" :::: "volatile");
+            }
+        }
+        println!("apd thread tick");
+    }
 }
 
 fn run_tests(ht: &HardwareThread, token: &ThreadToken) {
