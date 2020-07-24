@@ -69,6 +69,8 @@ impl WaitQueue {
         drop(wakeup_sets);
 
         if let Some(th) = th {
+            // FIXME: This is incorrect. Threads in kernel mode must not be migrated to
+            // a different hardware thread.
             ht.policy()
                 .add_thread(ht, PolicyContext::NonCritical(token), th);
         }
