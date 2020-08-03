@@ -1,4 +1,4 @@
-# Daily Schedule
+# Daily Schedule @ Part 1
 
 *Note: 各部分成果位于 [Report.md](Report.md) 中，此处仅作最简过程记录*
 
@@ -107,3 +107,9 @@ Nothing
 - 继续写报告
 
 [201b9b42 Update report.](https://github.com/losfair/rCore-SoC-2020/commit/201b9b42eb1fa5327a6b28742acd2bec12672a28)
+
+# Daily Schedule @ Part 2
+
+## Day 1 (2020/8/3)
+
+- 提出在 seL4 上运行 zCore 的选题
