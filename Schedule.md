@@ -113,3 +113,8 @@ Nothing
 ## Day 1 (2020/8/3)
 
 - 提出在 seL4 上运行 zCore 的选题
+
+## Day 2 (2020/8/4)
+
+- 配 seL4 构建环境
+- 学习 seL4 Dynamic Libraries Tutorials 1-4
