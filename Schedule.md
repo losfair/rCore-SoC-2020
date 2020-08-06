@@ -118,3 +118,8 @@ Nothing
 
 - 配 seL4 构建环境
 - 学习 seL4 Dynamic Libraries Tutorials 1-4
+
+## Day 3 (2020/8/5)
+
+- 讨论：确定了移植 zCore 到 seL4 的路径，先验证可行性，再实现。
+- 成功在 seL4 上运行 Rust 程序并进行 IPC
