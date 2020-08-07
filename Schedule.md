@@ -123,3 +123,8 @@ Nothing
 
 - 讨论：确定了移植 zCore 到 seL4 的路径，先验证可行性，再实现。
 - 成功在 seL4 上运行 Rust 程序并进行 IPC
+
+## Day 4 (2020/8/6)
+
+- 重构代码，去除内核进程 seL4 Runtime 依赖
+- 阅读 seL4 Manual ，熟悉各机制
